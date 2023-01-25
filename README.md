@@ -1,3 +1,9 @@
+#Features to implemen: 
+- stylegan3 support
+- improved performances
+
+
+
 # Lucid Sonic Dreams
 Lucid Sonic Dreams syncs GAN-generated visuals to music. By default, it uses [NVLabs StyleGAN2-ada](https://github.com/NVlabs/stylegan2-ada-pytorch), with pre-trained models lifted from [Justin Pinkney's consolidated repository](https://github.com/justinpinkney/awesome-pretrained-stylegan2). Custom weights and other GAN architectures can be used as well.
 
