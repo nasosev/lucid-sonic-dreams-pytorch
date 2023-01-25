@@ -1,4 +1,4 @@
-#Features to implemen: 
+# Features to implement: 
 - stylegan3 support
 - improved performances
 
