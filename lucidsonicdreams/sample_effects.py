@@ -2,7 +2,7 @@ import numpy as np
 
 import PIL
 import skimage.exposure
-
+from PIL import ImageEnhance
 
 def contrast_effect(array, strength: float, amplitude: float):
   '''Sample effect: increase image contrast'''

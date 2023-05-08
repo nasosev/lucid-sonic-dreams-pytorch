@@ -1,15 +1,13 @@
 import sys
 import os
 import shutil
-import pickle 
+import pickle
 from tqdm import tqdm
 import inspect
 import numpy as np
 import random
 from scipy.stats import truncnorm
-
 import torch
-import PIL
 from PIL import Image
 import skimage.exposure
 import librosa
@@ -22,16 +20,17 @@ from importlib import import_module
 from .helper_functions import * 
 from .sample_effects import *
 
+import cv2
+
+import concurrent.futures
 
 def import_stylegan_torch():
     # Clone Official StyleGAN2-ADA Repository
-    if not os.path.exists('stylegan2'):
-      #pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
-      #                        'stylegan2')
-        pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada-pytorch.git',
-                              'stylegan2')
-    # StyleGan2 imports
-    sys.path.append("stylegan2")
+    if not os.path.exists('stylegan3'):
+        pygit2.clone_repository('https://github.com/NVlabs/stylegan3.git',
+                              'stylegan3')
+    # StyleGan3 imports
+    sys.path.append("stylegan3")
     import legacy
     import dnnlib
 
@@ -51,7 +50,6 @@ def import_stylegan_tf():
 
 def show_styles():
     '''Show names of available (non-custom) styles'''
-
     all_models = consolidate_models()
     styles = set([model['name'].lower() for model in all_models])
     print(*styles, sep='\n')
@@ -130,14 +128,12 @@ class LucidSonicDream:
         #init_tf()
     else:
         #import_stylegan_torch()
-        # Clone Official StyleGAN2-ADA Repository
-        if not os.path.exists('stylegan2'):
-          #pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
-          #                        'stylegan2')
-            pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada-pytorch.git',
-                                  'stylegan2')
-        # StyleGan2 imports
-        sys.path.append("stylegan2")
+        # Clone Official StyleGAN3 Repository
+        if not os.path.exists('stylegan3'):
+            pygit2.clone_repository('https://github.com/NVlabs/stylegan3.git',
+                                  'stylegan3')
+        # StyleGan3 imports
+        sys.path.append("stylegan3")
         #import legacy
         #import dnnlib
         self.dnnlib = import_module("dnnlib")
@@ -324,6 +320,8 @@ class LucidSonicDream:
     num_possible_classes = self.num_possible_classes
     class_complexity = self.class_complexity
     class_pitch_react = self.class_pitch_react * 43 / self.fps
+
+
 
     # For the first class vector, simple use values from 
     # the first point in time where at least one pitch > 0 
@@ -547,13 +545,48 @@ class LucidSonicDream:
                           n_mels = self.input_shape, 
                           hop_length = self.frame_duration)
 
+  def process_save_image(self, queue,num_frame_batches):
+    i = 0
+    while True:
+      image_batch = queue.get()
+      if image_batch is None:
+        queue.task_done()
+        break
+      if (image_batch.ndim == 3):
+        array = image_batch
+        image_index = (i * self.batch_size)
+        for effect in self.custom_effects:
+            array = effect.apply_effect(array=array, index=image_index)
+
+        #   # Save. Include leading zeros in file name to keep alphabetical order
+        max_frame_index = num_frame_batches * self.batch_size + self.batch_size
+        file_name = str(image_index).zfill(len(str(max_frame_index)))
+        self.file_names.append(file_name)
+        self.final_images.append(array)
+      else:
+        for j, array in enumerate(image_batch): 
+          image_index = (i * self.batch_size) + j
+
+        #   # Apply efects
+          for effect in self.custom_effects:
+            array = effect.apply_effect(array=array, index=image_index)
+
+        #   # Save. Include leading zeros in file name to keep alphabetical order
+          max_frame_index = num_frame_batches * self.batch_size + self.batch_size
+          file_name = str(image_index).zfill(len(str(max_frame_index)))
+          self.file_names.append(file_name)
+          self.final_images.append(array)
+      i +=1
+      queue.task_done()
+
+  
+     
   def generate_frames(self):
     '''Generate GAN output for each frame of video'''
 
     file_name = self.file_name
     resolution = self.resolution
     batch_size = self.batch_size
-    num_frame_batches = int(len(self.noise) / batch_size)
     if self.use_tf:
         Gs_syn_kwargs = {'output_transform': {'func': self.convert_images_to_uint8, 
                                           'nchw_to_nhwc': True},
@@ -568,22 +601,25 @@ class LucidSonicDream:
         shutil.rmtree(self.frames_dir)
     os.makedirs(self.frames_dir)
 
+  
     # create dataloader
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ds = MultiTensorDataset([torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)])
     dl = torch.utils.data.DataLoader(ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4)
 
-    final_images = []
-    file_names = []
+    executor = concurrent.futures.ProcessPoolExecutor()
 
+    self.final_images = []
+    self.file_names = []
     # Generate frames
-    for i, (noise_batch, class_batch) in enumerate(tqdm(dl, position=0, desc="Generating frames")):
-        # If style is a custom function, pass batches to the function
-        if callable(self.style): 
-            image_batch = self.style(noise_batch=noise_batch, 
-                                   class_batch=class_batch)
-        # Otherwise, generate frames with StyleGAN(2)
-        else:
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+      for i, (noise_batch, class_batch) in enumerate(tqdm(dl, position=0, desc="Generating frames")):
+          # If style is a custom function, pass batches to the function
+          if callable(self.style): 
+              image_batch = self.style(noise_batch=noise_batch, 
+                                    class_batch=class_batch)
+          # Otherwise, generate frames with StyleGAN
+          else:
             if self.use_tf:
                 noise_batch = noise_batch.numpy()
                 class_batch = class_batch.numpy()
@@ -595,38 +631,25 @@ class LucidSonicDream:
                 with torch.no_grad():
                     w_batch = self.Gs.mapping(noise_batch, class_batch.to(device), truncation_psi=self.truncation_psi)
                     image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
-                image_batch = (image_batch.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).squeeze(0).cpu().numpy()
+                image_ready = (image_batch.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).squeeze(0).cpu().numpy()
+                if (batch_size == 1):
+                   image_ready = np.expand_dims(image_ready, axis=0)
+                future_to_url = {executor.submit(self.images_saver,image_ready,batch_size*i,resolution)}
 
-        # For each image in generated batch: apply effects, resize, and save
-        for j, array in enumerate(image_batch): 
-            image_index = (i * batch_size) + j
-
-            # Apply efects
-            for effect in self.custom_effects:
-                array = effect.apply_effect(array=array, index=image_index)
-
-            # Save. Include leading zeros in file name to keep alphabetical order
-            max_frame_index = num_frame_batches * batch_size + batch_size
-            file_name = str(image_index).zfill(len(str(max_frame_index)))
-        
-            file_names.append(file_name)
-            final_images.append(array)
-            
-            
-        if len(final_images) > 1000:
-            self.store_imgs(file_names, final_images, resolution)
-            file_names = []
-            final_images = []
-    if len(final_images) > 0:
-        self.store_imgs(file_names, final_images, resolution)
-
-  def store_imgs(self, file_names, final_images, resolution):
-    for file_name, final_image in tqdm(zip(file_names, final_images), position=1, leave=False, desc="Storing frames", total=len(file_names)):
-        with Image.fromarray(final_image, mode='RGB') as final_image_PIL:
-            # If resolution is provided, resize
-            if resolution:
-                final_image_PIL = final_image_PIL.resize((resolution, resolution))
-            final_image_PIL.save(os.path.join(self.frames_dir, file_name + '.jpg'), subsample=0, quality=95)
+  def images_saver(self,image,current_counter : int ,resolution):
+    file_names = []
+    final_images = []
+    for j, array in enumerate(image): 
+      file_names.append(str(current_counter+j).zfill(len(str(len(self.noise)))))
+      for effect in self.custom_effects:
+        array = effect.apply_effect(array=array, index=current_counter+j)
+      final_images.append(array)
+    for file_name, final_image in zip(file_names, final_images): #tqdm(zip(file_names, final_images), position=1, leave=False, desc="Storing frames", total=len(file_names)):
+      with Image.fromarray(final_image, mode='RGB') as final_image_PIL:
+              # If resolution is provided, resize
+              if resolution:
+                  final_image_PIL = final_image_PIL.resize((resolution, resolution))
+              final_image_PIL.save(os.path.join(self.frames_dir, file_name + '.tiff'))
 
 
   def hallucinate(self,
@@ -766,7 +789,7 @@ class LucidSonicDream:
     audio = mpy.AudioFileClip('tmp.wav', fps=self.sr * 2)
     video = mpy.ImageSequenceClip(self.frames_dir, fps=self.sr / self.frame_duration)
     video = video.set_audio(audio)
-    video.write_videofile(file_name,audio_codec='aac')
+    video.write_videofile(file_name,audio_codec='aac',threads=8)
 
     # Delete temporary audio file
     os.remove('tmp.wav')
