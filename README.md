@@ -1,7 +1,12 @@
-# Features to implement: 
-- stylegan3 support
-- improved performances
+# Fast Lucid Sonic Dreams
 
+# Features Implemented: 
+- Stylegan3 support;
+- Improved performances, by asynchronous writing of the images.
+
+# Features to implement: 
+- More parameters for enhance different genres of music; 
+- More features for different motions.
 
 
 # Lucid Sonic Dreams
