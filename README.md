@@ -1,10 +1,10 @@
 # Fast Lucid Sonic Dreams
 
-# Features Implemented: 
+## Features Implemented: 
 - Stylegan3 support;
-- Improved performances, by asynchronous writing of the images.
+- Improved performance through asynchronous image writing. (~1.5x on a 3090Ti - 1024x1024 output frames - 60s - 60fps)
 
-# Features to implement: 
+## Features to implement: 
 - More parameters for enhance different genres of music; 
 - More features for different motions.
 
