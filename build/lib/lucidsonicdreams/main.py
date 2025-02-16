@@ -36,17 +36,17 @@ def import_stylegan_torch():
     import dnnlib
 
 
-# def import_stylegan_tf():
-#     print("Cloning tensorflow...")
-#     if not os.path.exists('stylegan2_tf'):
-#         pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
-#                           'stylegan2_tf')
+def import_stylegan_tf():
+    print("Cloning tensorflow...")
+    if not os.path.exists('stylegan2_tf'):
+        pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
+                          'stylegan2_tf')
 
-#     #StyleGAN2 Imports
-#     sys.path.append("stylegan2_tf")
-#     import dnnlib as dnnlib
-#     from dnnlib.tflib.tfutil import convert_images_to_uint8 as convert_images_to_uint8
-#     init_tf()
+    #StyleGAN2 Imports
+    sys.path.append("stylegan2_tf")
+    import dnnlib as dnnlib
+    from dnnlib.tflib.tfutil import convert_images_to_uint8 as convert_images_to_uint8
+    init_tf()
 
 
 def show_styles():
@@ -79,7 +79,7 @@ class LucidSonicDream:
                style: str = 'wikiart',
                input_shape: int = None,
                num_possible_classes: int = None,
-               path: str = None):
+               ):
 
       # If style is a function, raise exception if function does not take
       # noise_batch or class_batch parameters
@@ -107,29 +107,27 @@ class LucidSonicDream:
     self.style = style
     self.input_shape = input_shape or 512
     self.num_possible_classes = num_possible_classes
-    self.path = path  # new parameter
     self.style_exists = False
 
     # some stylegan models cannot be converted to pytorch (wikiart)
-    self.use_tf = False # style in ("wikiart",)
+    self.use_tf = style in ("wikiart",)
     if self.use_tf:
-       False
-        # #import_stylegan_tf()
-        # print("Cloning tensorflow...")
-        # if not os.path.exists('stylegan2_tf'):
-        #     pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
-        #                       'stylegan2_tf')
+        #import_stylegan_tf()
+        print("Cloning tensorflow...")
+        if not os.path.exists('stylegan2_tf'):
+            pygit2.clone_repository('https://github.com/NVlabs/stylegan2-ada.git',
+                              'stylegan2_tf')
 
-        # #StyleGAN2 Imports
-        # sys.path.append("stylegan2_tf")
-        # self.dnnlib = import_module("dnnlib")
-        # #import dnnlib as dnnlib
-        # #from dnnlib.tflib.tfutil import convert_images_to_uint8
-        # tflib = import_module("dnnlib.tflib.tfutil")
-        # self.convert_images_to_uint8 = tflib.convert_images_to_uint8#import_module("dnnlib.tflib.tfutil", fromlist=["convert_images_to_uint8"])
-        # self.init_tf = tflib.init_tf #import_module("dnnlib.tflib.tfutil", fromlist=["init_tf"])
-        # self.init_tf()
-        # #init_tf()
+        #StyleGAN2 Imports
+        sys.path.append("stylegan2_tf")
+        self.dnnlib = import_module("dnnlib")
+        #import dnnlib as dnnlib
+        #from dnnlib.tflib.tfutil import convert_images_to_uint8
+        tflib = import_module("dnnlib.tflib.tfutil")
+        self.convert_images_to_uint8 = tflib.convert_images_to_uint8#import_module("dnnlib.tflib.tfutil", fromlist=["convert_images_to_uint8"])
+        self.init_tf = tflib.init_tf #import_module("dnnlib.tflib.tfutil", fromlist=["init_tf"])
+        self.init_tf()
+        #init_tf()
     else:
         #import_stylegan_torch()
         # Clone Official StyleGAN2-ADA Repository
@@ -148,50 +146,69 @@ class LucidSonicDream:
 
   def stylegan_init(self):
     '''Initialize StyleGAN(2) weights'''
+
     style = self.style
 
-    if self.path is not None:
-        # Use the provided path directly.
-        weights_file = self.path
+    # Initialize TensorFlow
+    #if self.use_tf:
+    #    init_tf()
+
+    # If style is not a .pkl file path, download weights from corresponding URL
+    if '.pkl' not in style:
+      all_models = consolidate_models()
+      all_styles = [model['name'].lower() for model in all_models]
+
+      # Raise exception if style is not valid
+      if style not in all_styles:
+        sys.exit('Style not valid. Call show_styles() to see all ' \
+        'valid styles, or upload your own .pkl file.')
+
+      download_url = [model for model in all_models \
+                      if model['name'].lower() == style][0]\
+                      ['download_url']
+      weights_file = style + '.pkl'
+
+      # If style .pkl already exists in working directory, skip download
+      if not os.path.exists(weights_file):
+        print('Downloading {} weights (This may take a while)...'.format(style))
+        try:
+          download_weights(download_url, weights_file)
+        except Exception:
+          exc_msg = 'Download failed. Try to download weights directly at {} '\
+                    'and pass the file path to the style parameter'\
+                    .format(download_url)
+          sys.exit(exc_msg)
+        print('Download complete')
+
     else:
-        # Existing logic: if style is not a .pkl path, download the weights.
-        if '.pkl' not in style:
-          all_models = consolidate_models()
-          all_styles = [model['name'].lower() for model in all_models]
-          if style not in all_styles:
-            sys.exit('Style not valid. Call show_styles() to see all valid styles, or upload your own .pkl file.')
-          download_url = [model for model in all_models if model['name'].lower() == style][0]['download_url']
-          weights_file = style + '.pkl'
-          if not os.path.exists(weights_file):
-            print('Downloading {} weights (This may take a while)...'.format(style))
-            try:
-              download_weights(download_url, weights_file)
-            except Exception:
-              exc_msg = 'Download failed. Try to download weights directly at {} and pass the file path to the style parameter'.format(download_url)
-              sys.exit(exc_msg)
-            print('Download complete')
+      weights_file = style
+
+    # load generator
+    if self.use_tf:
+        # Load weights
+        with open(weights_file, 'rb') as f:
+            self.Gs = pickle.load(f)[2]
+    else:
+        print(f'Loading networks from {weights_file}...')
+
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
         else:
-          weights_file = style
+            device = torch.device("cpu")
 
-    print(f'Loading networks from {weights_file}...')
+        with self.dnnlib.util.open_url(weights_file) as f:
+            self.Gs = self.legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-
-    with self.dnnlib.util.open_url(weights_file) as f:
-        self.Gs = self.legacy.load_network_pkl(f)['G_ema'].to(device)
-
-    # Auto assign num_possible_classes attribute (existing code)
+    # Auto assign num_possible_classes attribute
     try:
       print(self.Gs.mapping.input_templates)
       self.num_possible_classes = self.Gs.mapping.input_templates[1].shape[1]
     except ValueError:
       print(self.Gs.mapping.static_kwargs.label_size)
-      self.num_possible_classes = self.Gs.components.mapping.static_kwargs.label_size
+      self.num_possible_classes = self.Gs.components.mapping\
+                                  .static_kwargs.label_size
     except Exception:
       self.num_possible_classes = 0
 
@@ -385,7 +402,7 @@ class LucidSonicDream:
     motion_react = self.motion_react * 20 / fps
 
     # Get number of noise vectors to initialize (based on speed_fpm)
-    num_init_noise = round(librosa.get_duration(y=self.wav, sr=self.sr) / 60 * self.speed_fpm)
+    num_init_noise = round(librosa.get_duration(self.wav, self.sr) / 60 * self.speed_fpm)
 
     # If num_init_noise < 2, simply initialize the same
     # noise vector for all frames
@@ -622,6 +639,16 @@ class LucidSonicDream:
                         print(f"Warning: generated image width ({w}) does not match expected ({self.input_shape}).")
 
 
+                # noise_batch = noise_batch.float().to(device)
+                # with torch.no_grad():
+                #     w_batch = self.Gs.mapping(noise_batch, class_batch.float().to(device), truncation_psi=self.truncation_psi)
+                #     image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                # image_batch = (image_batch.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).squeeze(0).cpu().numpy()
+
+                # # If image_batch is a 3D array (i.e. single image), wrap it in a list
+                # if image_batch.ndim == 3:
+                #     image_batch = [image_batch]
+
         # For each image in generated batch: apply effects, resize, and save
         for j, array in enumerate(image_batch):
             image_index = (i * batch_size) + j
@@ -644,14 +671,6 @@ class LucidSonicDream:
             final_images = []
     if len(final_images) > 0:
         self.store_imgs(file_names, final_images, resolution)
-
-  # def store_imgs(self, file_names, final_images, resolution):
-  #   for file_name, final_image in tqdm(zip(file_names, final_images), position=1, leave=False, desc="Storing frames", total=len(file_names)):
-  #       with Image.fromarray(final_image, mode='RGB') as final_image_PIL:
-  #           # If resolution is provided, resize
-  #           if resolution:
-  #               final_image_PIL = final_image_PIL.resize((resolution, resolution))
-  #           final_image_PIL.save(os.path.join(self.frames_dir, file_name + '.jpg'), subsample=0, quality=95)
 
   def store_imgs(self, file_names, final_images, resolution):
       for file_name, final_image in tqdm(zip(file_names, final_images), position=1, leave=False, desc="Storing frames", total=len(file_names)):

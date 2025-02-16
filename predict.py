@@ -16,8 +16,12 @@ import torch
 from lucidsonicdreams import LucidSonicDream
 
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 
 models = [
     "Abstract art",
@@ -114,7 +118,7 @@ class Predictor(BasePredictor):
 
         motion_percussive = motion_react_to == "percussive"
         motion_harmonic =  motion_react_to == "harmonic"
-        
+
         L = LucidSonicDream(song = audio_file,
                             style = f"/src/models/{model_type}.pkl")
 
