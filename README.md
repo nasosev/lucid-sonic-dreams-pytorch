@@ -1,5 +1,9 @@
 # Fast Lucid Sonic Dreams
 
+## Apple Silicon Metal Performance Shaders support
+- This fork makes minimal changes for Apple Silicon MPS support but removes CUDA support.
+- Verified to work on Apple M4 2024, macOS 15.3.1.
+
 ## Features Implemented: 
 - Stylegan3 support;
 - Improved performance through asynchronous image writing. (~1.5x on a 3090Ti - 1024x1024 output frames - 60s - 60fps)
