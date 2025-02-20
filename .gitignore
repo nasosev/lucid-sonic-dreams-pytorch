@@ -10,3 +10,4 @@ stylegan2_tf/
 *.pkl
 gen.py
 .DS_Store
+*.tiff

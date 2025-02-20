@@ -203,7 +203,7 @@ class LucidSonicDream:
                 self.Gs = pickle.load(f)[2]
         else:
             print(f"Loading networks from {weights_file}...")
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = torch.device("mps" if torch.mps.is_available() else "cpu")
             with self.dnnlib.util.open_url(weights_file) as f:
                 self.Gs = self.legacy.load_network_pkl(f)["G_ema"].to(device)  # type: ignore
 
@@ -667,7 +667,7 @@ class LucidSonicDream:
         os.makedirs(self.frames_dir)
 
         # create dataloader
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("mps" if torch.mps.is_available() else "cpu")
         ds = MultiTensorDataset(
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
@@ -702,11 +702,11 @@ class LucidSonicDream:
                         )
                         image_batch = np.array(image_batch)
                     else:
-                        noise_batch = noise_batch.to(device)
+                        noise_batch = noise_batch.to(device=device, dtype=torch.float32)
                         with torch.no_grad():
                             w_batch = self.Gs.mapping(
                                 noise_batch,
-                                class_batch.to(device),
+                                class_batch.to(device=device, dtype=torch.float32),
                                 truncation_psi=self.truncation_psi,
                             )
                             image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
