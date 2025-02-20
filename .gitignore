@@ -9,3 +9,4 @@ stylegan2_tf/
 *.mp4
 *.pkl
 gen.py
+.DS_Store
