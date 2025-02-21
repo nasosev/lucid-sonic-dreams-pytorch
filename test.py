@@ -6,7 +6,7 @@ from lucidsonicdreams.main import EffectsGenerator
 # Prevents "RuntimeError: MPS backend out of memory" errors on MacOS
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
-filename = "models/vivid-floral-256.pkl"
+filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
 
 
 if __name__ == "__main__":
