@@ -1,28 +1,39 @@
-# Fast Lucid Sonic Dreams
+# Notes about this fork
 
 ## Apple Silicon Metal Performance Shaders support
+
 - This fork makes minimal changes for Apple Silicon MPS support but removes CUDA support.
 - Verified to work on Apple M4 2024, macOS 15.3.1.
 
-## Features Implemented: 
+## Resources
+
+-[NVlabs StyleGAN3](https://github.com/NVlabs/stylegan3)
+
+- [awesome-pretrained-stylegan3](https://github.com/justinpinkney/awesome-pretrained-stylegan3)
+
+# Fast Lucid Sonic Dreams
+
+## Features Implemented
+
 - Stylegan3 support;
 - Improved performance through asynchronous image writing. (~1.5x on a 3090Ti - 1024x1024 output frames - 60s - 60fps)
 
-## Features to implement: 
-- More parameters for enhance different genres of music; 
+## Features to implement
+
+- More parameters for enhance different genres of music;
 - More features for different motions.
 
-
 # Lucid Sonic Dreams
+
 Lucid Sonic Dreams syncs GAN-generated visuals to music. By default, it uses [NVLabs StyleGAN2-ada](https://github.com/NVlabs/stylegan2-ada-pytorch), with pre-trained models lifted from [Justin Pinkney's consolidated repository](https://github.com/justinpinkney/awesome-pretrained-stylegan2). Custom weights and other GAN architectures can be used as well.
 
 Sample output can be found on [YouTube](https://youtu.be/l-nGC-ve7sI) and [Instagram](https://www.instagram.com/lucidsonicdreams/).
 
-## Installation  
-  
+## Installation
+
 This implementation has been teston on Python 3.6 and 3.7. This now uses the PyTorch implementation of StyleGAN2.
 
-To install, simply run: 
+To install, simply run:
 
 ```pip install lucidsonicdreams```
 
@@ -39,7 +50,7 @@ from lucidsonicdreams import LucidSonicDream
 L = LucidSonicDream(song = 'song.mp3',
                     style = 'abstract photos')
 
-L.hallucinate(file_name = 'song.mp4') 
+L.hallucinate(file_name = 'song.mp4')
 ```
 
 ### Parameters

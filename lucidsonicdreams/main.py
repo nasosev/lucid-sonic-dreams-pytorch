@@ -668,6 +668,8 @@ class LucidSonicDream:
 
         # create dataloader
         device = torch.device("mps" if torch.mps.is_available() else "cpu")
+
+        print("Using device:", device)
         ds = MultiTensorDataset(
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
