@@ -326,15 +326,15 @@ class LucidSonicDream:
         """Update direction of noise interpolation based on truncation value"""
         m = self.motion_react
         t = self.truncation
-        motion_signs = self.motion_signs
         current_noise = self.current_noise
+        motion_signs = self.motion_signs
 
-        # For each current value in noise vector, change direction if absolute
-        # value +/- motion_react is larger than 2 * truncation
-        update = lambda cn, ms: 1 if cn - m < -2 * t else -1 if cn + m >= 2 * t else ms
-        update_vec = np.vectorize(update)
-
-        return update_vec(current_noise, motion_signs)
+        new_signs = np.where(
+            current_noise - m < -2 * t,
+            1,
+            np.where(current_noise + m >= 2 * t, -1, motion_signs),
+        )
+        return new_signs
 
     def generate_class_vec(self, frame):
         """Generate a class vector using chromagram, where each pitch
@@ -407,84 +407,70 @@ class LucidSonicDream:
 
     def generate_vectors(self):
         """Generates noise and class vectors as inputs for each frame"""
+        # Smoothing parameters
         PULSE_SMOOTH = 0.75
         MOTION_SMOOTH = 0.75
-        classes = self.classes
-        class_shuffle_seconds = self.class_shuffle_seconds or [0]
-        class_shuffle_strength = round(self.class_shuffle_strength * 12)
+
+        # Derived parameters
         fps = self.fps
+        num_frames = len(self.spec_norm_class)
         class_smooth_frames = self.class_smooth_seconds * fps
+        class_shuffle_strength = round(self.class_shuffle_strength * 12)
         motion_react = self.motion_react * 20 / fps
 
-        # Get number of noise vectors to initialize (based on speed_fpm)
-        # num_init_noise = round(librosa.get_duration(self.wav, self.sr) / 60 * self.speed_fpm)
-        num_init_noise = round(
-            librosa.get_duration(y=self.wav, sr=self.sr) / 60 * self.speed_fpm
-        )
+        # Determine how many distinct noise vectors to initialize based on speed_fpm
+        duration_seconds = librosa.get_duration(y=self.wav, sr=self.sr)
+        num_init_noise = round(duration_seconds / 60 * self.speed_fpm)
 
-        # If num_init_noise < 2, simply initialize the same
-        # noise vector for all frames
+        # Initialize the base noise vectors via interpolation
         if num_init_noise < 2:
-            noise = [
+            base_noise = (
                 self.truncation
                 * truncnorm.rvs(-2, 2, size=(self.batch_size, self.input_shape)).astype(
                     np.float32
                 )[0]
-            ] * len(self.spec_norm_class)
-
-        # Otherwise, initialize num_init_noise different vectors, and generate
-        # linear interpolations between these vectors
+            )
+            noise = [base_noise.copy() for _ in range(num_frames)]
         else:
-            # Initialize vectors
             init_noise = [
                 self.truncation
                 * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(np.float32)[0]
                 for i in range(num_init_noise)
             ]
+            # Compute number of interpolation steps between each pair of initial noise vectors
+            steps = int(np.floor(num_frames / len(init_noise)) - 1)
+            noise = full_frame_interpolation(init_noise, steps, num_frames)
 
-            # Compute number of steps between each pair of vectors
-            steps = int(np.floor(len(self.spec_norm_class)) / len(init_noise) - 1)
-
-            # Interpolate
-            noise = full_frame_interpolation(
-                init_noise, steps, len(self.spec_norm_class)
-            )
-
-        # Initialize lists of Pulse, Motion, and Class vectors
+        # Initialize lists to store incremental updates and class vectors
         pulse_noise = []
         motion_noise = []
         self.class_vecs = []
 
-        # Initialize "base" vectors based on Pulse/Motion Reactivity values
+        # Base vectors for Pulse and Motion updates
         pulse_base = np.array([self.pulse_react] * self.input_shape)
         motion_base = np.array([motion_react] * self.input_shape)
 
-        # Randomly initialize "update directions" of noise vectors
+        # Initialize update directions and randomness factors
         self.motion_signs = np.array(
-            [random.choice([1, -1]) for n in range(self.input_shape)]
+            [random.choice([1, -1]) for _ in range(self.input_shape)]
+        )
+        rand_factors = np.where(
+            np.random.rand(self.input_shape) < 0.5, 1, 1 - self.motion_randomness
         )
 
-        # Randomly initialize factors based on motion_randomness
-        rand_factors = np.array(
-            [
-                random.choice([1, 1 - self.motion_randomness])
-                for n in range(self.input_shape)
-            ]
-        )
+        cumulative_motion = np.zeros(self.input_shape, dtype=np.float32)
 
-        for i in range(len(self.spec_norm_class)):
-            # UPDATE NOISE #
-
-            # Re-initialize randomness factors every 4 seconds
+        for i in range(num_frames):
+            # ----- UPDATE NOISE -----
+            # Every 4 seconds (every round(fps*4) frames) reinitialize random factors
             if i % round(fps * 4) == 0:
-                rand_factors = np.array(
-                    [
-                        random.choice([1, 1 - self.motion_randomness])
-                        for n in range(self.input_shape)
-                    ]
+                rand_factors = np.where(
+                    np.random.rand(self.input_shape) < 0.5,
+                    1,
+                    1 - self.motion_randomness,
                 )
 
-            # Generate incremental update vectors for Pulse and Motion
+            # Compute the incremental update vectors for Pulse and Motion noise
             pulse_noise_add = pulse_base * self.spec_norm_pulse[i]
             motion_noise_add = (
                 motion_base
@@ -493,8 +479,7 @@ class LucidSonicDream:
                 * rand_factors
             )
 
-            # Smooth each update vector using a weighted average of
-            # itself and the previous vector
+            # Apply recursive smoothing (a weighted average with the previous update)
             if i > 0:
                 pulse_noise_add = pulse_noise[
                     i - 1
@@ -503,49 +488,193 @@ class LucidSonicDream:
                     i - 1
                 ] * MOTION_SMOOTH + motion_noise_add * (1 - MOTION_SMOOTH)
 
-            # Append Pulse and Motion update vectors to respective lists
             pulse_noise.append(pulse_noise_add)
             motion_noise.append(motion_noise_add)
 
-            # Update current noise vector by adding current Pulse vector and
-            # a cumulative sum of Motion vectors
-            noise[i] = noise[i] + pulse_noise_add + sum(motion_noise[: i + 1])
-            self.noise = noise
-            self.current_noise = noise[i]
+            # Accumulate the motion noise over frames and update the base noise vector
+            cumulative_motion += motion_noise_add
+            noise[i] = noise[i] + pulse_noise_add + cumulative_motion
 
-            # Update directions
+            # Update the current noise attribute and adjust motion directions based on current noise
+            self.noise = noise  # update the noise attribute (could be used elsewhere)
+            self.current_noise = noise[i]
             self.motion_signs = self.update_motion_signs()
 
-            # UPDATE CLASSES #
-
-            # If current frame is a shuffle frame, shuffle classes accordingly
+            # ----- UPDATE CLASSES -----
+            # If this frame should trigger a shuffle, update the class list accordingly
             if self.is_shuffle_frame(i):
                 self.classes = (
                     self.classes[class_shuffle_strength:]
                     + self.classes[:class_shuffle_strength]
                 )
 
-            # Generate class update vector and append to list
+            # Generate and store the class update vector for this frame
             class_vec_add = self.generate_class_vec(frame=i)
             self.class_vecs.append(class_vec_add)
 
-        # Smoothen class vectors by obtaining the mean vector per
-        # class_smooth_frames frames, and interpolating between these vectors
+        # Smooth class vectors by averaging every class_smooth_frames frames and interpolating
         if class_smooth_frames > 1:
-
-            # Obtain mean vectors
             class_frames_interp = [
                 np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
                 for i in range(0, len(self.class_vecs), class_smooth_frames)
             ]
-            # Interpolate
             self.class_vecs = full_frame_interpolation(
                 class_frames_interp, class_smooth_frames, len(self.class_vecs)
             )
 
-        # conver to numpy array:
+        # Convert the lists to numpy arrays for downstream processing
         self.noise = np.array(self.noise)
         self.class_vecs = np.array(self.class_vecs)
+
+    # def generate_vectors(self):
+    #     """Generates noise and class vectors as inputs for each frame"""
+    #     PULSE_SMOOTH = 0.75
+    #     MOTION_SMOOTH = 0.75
+    #     classes = self.classes
+    #     class_shuffle_seconds = self.class_shuffle_seconds or [0]
+    #     class_shuffle_strength = round(self.class_shuffle_strength * 12)
+    #     fps = self.fps
+    #     class_smooth_frames = self.class_smooth_seconds * fps
+    #     motion_react = self.motion_react * 20 / fps
+
+    #     # Get number of noise vectors to initialize (based on speed_fpm)
+    #     # num_init_noise = round(librosa.get_duration(self.wav, self.sr) / 60 * self.speed_fpm)
+    #     num_init_noise = round(
+    #         librosa.get_duration(y=self.wav, sr=self.sr) / 60 * self.speed_fpm
+    #     )
+
+    #     # If num_init_noise < 2, simply initialize the same
+    #     # noise vector for all frames
+    #     if num_init_noise < 2:
+    #         noise = [
+    #             self.truncation
+    #             * truncnorm.rvs(-2, 2, size=(self.batch_size, self.input_shape)).astype(
+    #                 np.float32
+    #             )[0]
+    #         ] * len(self.spec_norm_class)
+
+    #     # Otherwise, initialize num_init_noise different vectors, and generate
+    #     # linear interpolations between these vectors
+    #     else:
+    #         # Initialize vectors
+    #         init_noise = [
+    #             self.truncation
+    #             * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(np.float32)[0]
+    #             for i in range(num_init_noise)
+    #         ]
+
+    #         # Compute number of steps between each pair of vectors
+    #         steps = int(np.floor(len(self.spec_norm_class)) / len(init_noise) - 1)
+
+    #         # Interpolate
+    #         noise = full_frame_interpolation(
+    #             init_noise, steps, len(self.spec_norm_class)
+    #         )
+
+    #     # Initialize lists of Pulse, Motion, and Class vectors
+    #     pulse_noise = []
+    #     motion_noise = []
+    #     self.class_vecs = []
+
+    #     # Initialize "base" vectors based on Pulse/Motion Reactivity values
+    #     pulse_base = np.array([self.pulse_react] * self.input_shape)
+    #     motion_base = np.array([motion_react] * self.input_shape)
+
+    #     # Randomly initialize "update directions" of noise vectors
+    #     self.motion_signs = np.array(
+    #         [random.choice([1, -1]) for n in range(self.input_shape)]
+    #     )
+
+    #     # Randomly initialize factors based on motion_randomness
+    #     # rand_factors = np.array(
+    #     #     [
+    #     #         random.choice([1, 1 - self.motion_randomness])
+    #     #         for n in range(self.input_shape)
+    #     #     ]
+    #     # )
+    #     rand_factors = np.where(
+    #         np.random.rand(self.input_shape) < 0.5, 1, 1 - self.motion_randomness
+    #     )
+
+    #     cumulative_motion = np.zeros(self.input_shape, dtype=np.float32)
+
+    #     for i in range(len(self.spec_norm_class)):
+    #         # UPDATE NOISE #
+
+    #         # Re-initialize randomness factors every 4 seconds
+
+    #         if i % round(fps * 4) == 0:
+    #             rand_factors = np.where(
+    #                 np.random.rand(self.input_shape) < 0.5,
+    #                 1,
+    #                 1 - self.motion_randomness,
+    #             )
+
+    #         # Generate incremental update vectors for Pulse and Motion
+    #         pulse_noise_add = pulse_base * self.spec_norm_pulse[i]
+    #         motion_noise_add = (
+    #             motion_base
+    #             * self.spec_norm_motion[i]
+    #             * self.motion_signs
+    #             * rand_factors
+    #         )
+
+    #         # Smooth each update vector using a weighted average of
+    #         # itself and the previous vector
+    #         if i > 0:
+    #             pulse_noise_add = pulse_noise[
+    #                 i - 1
+    #             ] * PULSE_SMOOTH + pulse_noise_add * (1 - PULSE_SMOOTH)
+    #             motion_noise_add = motion_noise[
+    #                 i - 1
+    #             ] * MOTION_SMOOTH + motion_noise_add * (1 - MOTION_SMOOTH)
+
+    #         # Append Pulse and Motion update vectors to respective lists
+    #         pulse_noise.append(pulse_noise_add)
+    #         motion_noise.append(motion_noise_add)
+
+    #         # Update current noise vector by adding current Pulse vector and
+    #         # a cumulative sum of Motion vectors
+    #         # noise[i] = noise[i] + pulse_noise_add + sum(motion_noise[: i + 1])
+    #         cumulative_motion += motion_noise_add
+    #         noise[i] = noise[i] + pulse_noise_add + cumulative_motion
+
+    #         self.noise = noise
+    #         self.current_noise = noise[i]
+
+    #         # Update directions
+    #         self.motion_signs = self.update_motion_signs()
+
+    #         # UPDATE CLASSES #
+
+    #         # If current frame is a shuffle frame, shuffle classes accordingly
+    #         if self.is_shuffle_frame(i):
+    #             self.classes = (
+    #                 self.classes[class_shuffle_strength:]
+    #                 + self.classes[:class_shuffle_strength]
+    #             )
+
+    #         # Generate class update vector and append to list
+    #         class_vec_add = self.generate_class_vec(frame=i)
+    #         self.class_vecs.append(class_vec_add)
+
+    #     # Smoothen class vectors by obtaining the mean vector per
+    #     # class_smooth_frames frames, and interpolating between these vectors
+    #     if class_smooth_frames > 1:
+
+    #         # Obtain mean vectors
+    #         class_frames_interp = [
+    #             np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
+    #             for i in range(0, len(self.class_vecs), class_smooth_frames)
+    #         ]
+    #         # Interpolate
+    #         self.class_vecs = full_frame_interpolation(
+    #             class_frames_interp, class_smooth_frames, len(self.class_vecs)
+    #         )
+
+    #     # conver to numpy array:
+    #     self.noise = np.array(self.noise)
+    #     self.class_vecs = np.array(self.class_vecs)
 
     def setup_effects(self):
         """Initializes effects to be applied to each frame"""
@@ -642,7 +771,7 @@ class LucidSonicDream:
             i += 1
             queue.task_done()
 
-    def generate_frames(self):
+        # def generate_frames(self):
         """Generate GAN output for each frame of video"""
 
         file_name = self.file_name
@@ -677,7 +806,7 @@ class LucidSonicDream:
             ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4
         )
 
-        executor = concurrent.futures.ProcessPoolExecutor()
+        # executor = concurrent.futures.ProcessPoolExecutor()
 
         self.final_images = []
         self.file_names = []
@@ -705,10 +834,17 @@ class LucidSonicDream:
                         image_batch = np.array(image_batch)
                     else:
                         noise_batch = noise_batch.to(device=device, dtype=torch.float32)
+                        # Convert once using torch.tensor, ensuring the target device is specified
+                        noise_tensor = torch.tensor(
+                            noise_batch, device=device, dtype=torch.float32
+                        )
+                        class_tensor = torch.tensor(
+                            class_batch, device=device, dtype=torch.float32
+                        )
                         with torch.no_grad():
                             w_batch = self.Gs.mapping(
-                                noise_batch,
-                                class_batch.to(device=device, dtype=torch.float32),
+                                noise_tensor,
+                                class_tensor,
                                 truncation_psi=self.truncation_psi,
                             )
                             image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
@@ -730,6 +866,107 @@ class LucidSonicDream:
                                 resolution,
                             )
                         }
+
+    def generate_frames(self):
+        """Generate GAN output for each frame of video."""
+        file_name = self.file_name
+        resolution = self.resolution
+        batch_size = self.batch_size
+
+        # Set synthesis kwargs based on framework choice
+        if self.use_tf:
+            Gs_syn_kwargs = {
+                "output_transform": {
+                    "func": self.convert_images_to_uint8,
+                    "nchw_to_nhwc": True,
+                },
+                "randomize_noise": False,
+                "minibatch_size": batch_size,
+            }
+        else:
+            Gs_syn_kwargs = {"noise_mode": "const"}  # Options: random, const, None
+
+        # Set up temporary frame directory
+        self.frames_dir = file_name.split(".mp4")[0] + "_frames"
+        if os.path.exists(self.frames_dir):
+            shutil.rmtree(self.frames_dir)
+        os.makedirs(self.frames_dir)
+
+        # Create dataloader from noise and class vectors
+        device = torch.device("mps" if torch.mps.is_available() else "cpu")
+        print("Using device:", device)
+        ds = MultiTensorDataset(
+            [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
+        )
+        dl = torch.utils.data.DataLoader(
+            ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4
+        )
+
+        self.final_images = []
+        self.file_names = []
+
+        # Use a ThreadPoolExecutor to handle image saving concurrently
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            for i, (noise_batch, class_batch) in enumerate(
+                tqdm(dl, position=0, desc="Generating frames")
+            ):
+                # Generate images via custom style function or StyleGAN
+                if callable(self.style):
+                    image_batch = self.style(
+                        noise_batch=noise_batch, class_batch=class_batch
+                    )
+                else:
+                    if self.use_tf:
+                        # Convert tensor batches to numpy arrays for TF processing
+                        noise_batch_np = noise_batch.numpy()
+                        class_batch_np = class_batch.numpy()
+                        # Tile class batch if necessary (ensuring shape compatibility)
+                        tiled_class = np.tile(class_batch_np, (batch_size, 1))
+                        w_batch = self.Gs.components.mapping.run(
+                            noise_batch_np, tiled_class
+                        )
+                        image_batch = self.Gs.components.synthesis.run(
+                            w_batch, **Gs_syn_kwargs
+                        )
+                        image_batch = np.array(image_batch)
+                    else:
+                        # For PyTorch: move to device and run synthesis with no_grad
+                        # Convert once using torch.tensor, ensuring the target device is specified
+                        noise_tensor = torch.tensor(
+                            noise_batch, device=device, dtype=torch.float32
+                        )
+                        class_tensor = torch.tensor(
+                            class_batch, device=device, dtype=torch.float32
+                        )
+                        with torch.no_grad():
+                            w_batch = self.Gs.mapping(
+                                noise_tensor,
+                                class_tensor,
+                                truncation_psi=self.truncation_psi,
+                            )
+                            image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                        # Convert tensor output to uint8 numpy array
+                        image_batch = (
+                            (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
+                            .clamp(0, 255)
+                            .to(torch.uint8)
+                            .cpu()
+                            .numpy()
+                        )
+
+                # Ensure image_batch has shape (batch_size, height, width, channels)
+                if batch_size == 1 and image_batch.ndim == 3:
+                    image_batch = np.expand_dims(image_batch, axis=0)
+
+                # Submit the image saving task to the executor
+                future = executor.submit(
+                    self.images_saver, image_batch, batch_size * i, resolution
+                )
+                futures.append(future)
+
+            # Wait for all image-saving tasks to complete
+            concurrent.futures.wait(futures)
 
     def images_saver(self, image, current_counter: int, resolution):
         file_names = []

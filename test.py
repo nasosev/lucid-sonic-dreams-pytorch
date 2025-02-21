@@ -1,11 +1,13 @@
 import time
 import os
 from lucidsonicdreams import LucidSonicDream
+from lucidsonicdreams.main import EffectsGenerator
 
 # Prevents "RuntimeError: MPS backend out of memory" errors on MacOS
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
-filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
+filename = "models/vivid-floral-256.pkl"
+
 
 if __name__ == "__main__":
     start_time = time.time()  # Start tracking time
@@ -14,9 +16,9 @@ if __name__ == "__main__":
     L.hallucinate(
         file_name="song.mp4",
         resolution=256,
-        fps=1,
-        # contrast_strength=1,
-        # flash_strength=1,
+        fps=24,
+        contrast_strength=1,
+        flash_strength=1,
     )
 
     end_time = time.time()  # End tracking time

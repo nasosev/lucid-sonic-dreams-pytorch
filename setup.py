@@ -1,10 +1,11 @@
 import setuptools
 
+
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="lucidsonicdreams", 
+    name="lucidsonicdreams",
     version="0.4",
     author="Alain Mikael Alafriz",
     author_email="mikaelalafriz@gmail.com",
@@ -19,18 +20,20 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    install_requires=['torch',
-                      'librosa',
-                      'numpy',
-                      'moviepy',
-                      'Pillow',
-                      'tqdm',
-                      'scipy',
-                      'scikit-image',
-                      'pygit2',
-                      'gdown', 
-                      'mega.py',
-                      'requests',
-                      'pandas',
-                      'SoundFile']
+    install_requires=[
+        "torch",
+        "librosa",
+        "numpy",
+        "moviepy",
+        "Pillow",
+        "tqdm",
+        "scipy",
+        "scikit-image",
+        "pygit2",
+        "gdown",
+        "mega.py",
+        "requests",
+        "pandas",
+        "SoundFile",
+    ],
 )
