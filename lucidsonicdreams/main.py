@@ -80,21 +80,19 @@ class LucidSonicDream:
         style: str = "wikiart",
         input_shape: int = None,
         num_possible_classes: int = None,
+        latent_center: np.ndarray = None,  # New optional parameter
+        latent_radius: float = None,  # New optional parameter
     ):
-
         # If style is a function, raise exception if function does not take
         # noise_batch or class_batch parameters
         if callable(style):
-
             func_sig = list(inspect.getfullargspec(style))[0]
-
             for arg in ["noise_batch", "class_batch"]:
                 if arg not in func_sig:
                     sys.exit(
                         "func must be a function with parameters "
                         "noise_batch and class_batch"
                     )
-
             # Raise exception if input_shape or num_possible_classes is not provided
             if (input_shape is None) or (num_possible_classes is None):
                 sys.exit(
@@ -114,41 +112,31 @@ class LucidSonicDream:
         self.num_possible_classes = num_possible_classes
         self.style_exists = False
 
+        # Add new latent space exploration parameters
+        self.latent_center = latent_center
+        self.latent_radius = latent_radius
+
         # some stylegan models cannot be converted to pytorch (wikiart)
         self.use_tf = style in ("wikiart",)
         if self.use_tf:
-            # import_stylegan_tf()
             print("Cloning tensorflow...")
             if not os.path.exists("stylegan2_tf"):
                 pygit2.clone_repository(
                     "https://github.com/NVlabs/stylegan2-ada.git", "stylegan2_tf"
                 )
-
             # StyleGAN2 Imports
             sys.path.append("stylegan2_tf")
             self.dnnlib = import_module("dnnlib")
-            # import dnnlib as dnnlib
-            # from dnnlib.tflib.tfutil import convert_images_to_uint8
             tflib = import_module("dnnlib.tflib.tfutil")
-            self.convert_images_to_uint8 = (
-                tflib.convert_images_to_uint8
-            )  # import_module("dnnlib.tflib.tfutil", fromlist=["convert_images_to_uint8"])
-            self.init_tf = (
-                tflib.init_tf
-            )  # import_module("dnnlib.tflib.tfutil", fromlist=["init_tf"])
+            self.convert_images_to_uint8 = tflib.convert_images_to_uint8
+            self.init_tf = tflib.init_tf
             self.init_tf()
-            # init_tf()
         else:
-            # import_stylegan_torch()
-            # Clone Official StyleGAN3 Repository
             if not os.path.exists("stylegan3"):
                 pygit2.clone_repository(
                     "https://github.com/NVlabs/stylegan3.git", "stylegan3"
                 )
-            # StyleGan3 imports
             sys.path.append("stylegan3")
-            # import legacy
-            # import dnnlib
             self.dnnlib = import_module("dnnlib")
             self.legacy = import_module("legacy")
 
@@ -411,37 +399,78 @@ class LucidSonicDream:
         PULSE_SMOOTH = 0.75
         MOTION_SMOOTH = 0.75
 
-        # Derived parameters
         fps = self.fps
         num_frames = len(self.spec_norm_class)
         class_smooth_frames = self.class_smooth_seconds * fps
         class_shuffle_strength = round(self.class_shuffle_strength * 12)
         motion_react = self.motion_react * 20 / fps
 
-        # Determine how many distinct noise vectors to initialize based on speed_fpm
+        # Determine number of distinct noise vectors based on speed_fpm and audio duration
         duration_seconds = librosa.get_duration(y=self.wav, sr=self.sr)
         num_init_noise = round(duration_seconds / 60 * self.speed_fpm)
 
-        # Initialize the base noise vectors via interpolation
-        if num_init_noise < 2:
-            base_noise = (
-                self.truncation
-                * truncnorm.rvs(-2, 2, size=(self.batch_size, self.input_shape)).astype(
-                    np.float32
-                )[0]
-            )
-            noise = [base_noise.copy() for _ in range(num_frames)]
-        else:
-            init_noise = [
-                self.truncation
-                * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(np.float32)[0]
-                for i in range(num_init_noise)
-            ]
-            # Compute number of interpolation steps between each pair of initial noise vectors
-            steps = int(np.floor(num_frames / len(init_noise)) - 1)
-            noise = full_frame_interpolation(init_noise, steps, num_frames)
+        # --- New: Explore a specific latent region if latent_center is provided ---
+        if self.latent_center is not None:
+            # Use latent_radius (or default to 0.5) to control the spread
+            radius = self.latent_radius if self.latent_radius is not None else 0.5
+            if num_init_noise < 2:
+                base_noise = (
+                    self.latent_center
+                    + radius
+                    * truncnorm.rvs(
+                        -2, 2, size=(self.batch_size, self.input_shape)
+                    ).astype(np.float32)[0]
+                )
+                noise = [base_noise.copy() for _ in range(num_frames)]
+            else:
 
-        # Initialize lists to store incremental updates and class vectors
+                # Generate one small perturbation using a narrow normal distribution.
+                perturbation = generate_narrow_perturbation(
+                    512, scale=self.latent_radius
+                )
+                target_latent = self.latent_center + perturbation
+
+                # Then, for each frame, compute the interpolation factor:
+                noise = []
+                for i in range(num_frames):
+                    t = i / (num_frames - 1)  # interpolation parameter in [0, 1]
+                    # Slerp between the original latent_center and the target_latent
+                    interpolated = slerp(t, self.latent_center, target_latent)
+                    noise.append(interpolated)
+
+                init_noise = [
+                    self.latent_center
+                    + radius
+                    * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(
+                        np.float32
+                    )[0]
+                    for i in range(num_init_noise)
+                ]
+                steps = int(np.floor(num_frames / len(init_noise)) - 1)
+
+                noise = full_frame_interpolation(init_noise, steps, num_frames)
+        else:
+            # --- Original behavior when latent_center is not provided ---
+            if num_init_noise < 2:
+                base_noise = (
+                    self.truncation
+                    * truncnorm.rvs(
+                        -2, 2, size=(self.batch_size, self.input_shape)
+                    ).astype(np.float32)[0]
+                )
+                noise = [base_noise.copy() for _ in range(num_frames)]
+            else:
+                init_noise = [
+                    self.truncation
+                    * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(
+                        np.float32
+                    )[0]
+                    for i in range(num_init_noise)
+                ]
+                steps = int(np.floor(num_frames / len(init_noise)) - 1)
+                noise = full_frame_interpolation(init_noise, steps, num_frames)
+
+        # Initialize lists for incremental updates and class vectors
         pulse_noise = []
         motion_noise = []
         self.class_vecs = []
@@ -457,12 +486,10 @@ class LucidSonicDream:
         rand_factors = np.where(
             np.random.rand(self.input_shape) < 0.5, 1, 1 - self.motion_randomness
         )
-
         cumulative_motion = np.zeros(self.input_shape, dtype=np.float32)
 
         for i in range(num_frames):
-            # ----- UPDATE NOISE -----
-            # Every 4 seconds (every round(fps*4) frames) reinitialize random factors
+            # Reinitialize randomness factors every 4 seconds
             if i % round(fps * 4) == 0:
                 rand_factors = np.where(
                     np.random.rand(self.input_shape) < 0.5,
@@ -470,7 +497,7 @@ class LucidSonicDream:
                     1 - self.motion_randomness,
                 )
 
-            # Compute the incremental update vectors for Pulse and Motion noise
+            # Compute incremental update vectors for Pulse and Motion noise
             pulse_noise_add = pulse_base * self.spec_norm_pulse[i]
             motion_noise_add = (
                 motion_base
@@ -479,7 +506,7 @@ class LucidSonicDream:
                 * rand_factors
             )
 
-            # Apply recursive smoothing (a weighted average with the previous update)
+            # Apply recursive smoothing
             if i > 0:
                 pulse_noise_add = pulse_noise[
                     i - 1
@@ -491,17 +518,18 @@ class LucidSonicDream:
             pulse_noise.append(pulse_noise_add)
             motion_noise.append(motion_noise_add)
 
-            # Accumulate the motion noise over frames and update the base noise vector
+            # Accumulate motion noise and update the base noise vector
             cumulative_motion += motion_noise_add
             noise[i] = noise[i] + pulse_noise_add + cumulative_motion
+            # Constrain the noise to remain within a sphere around latent_center
+            noise[i] = constrain_noise(noise[i], self.latent_center, self.latent_radius)
 
-            # Update the current noise attribute and adjust motion directions based on current noise
-            self.noise = noise  # update the noise attribute (could be used elsewhere)
+            # Update current noise and adjust motion directions
+            self.noise = noise
             self.current_noise = noise[i]
             self.motion_signs = self.update_motion_signs()
 
-            # ----- UPDATE CLASSES -----
-            # If this frame should trigger a shuffle, update the class list accordingly
+            # Shuffle classes if required
             if self.is_shuffle_frame(i):
                 self.classes = (
                     self.classes[class_shuffle_strength:]
@@ -512,7 +540,7 @@ class LucidSonicDream:
             class_vec_add = self.generate_class_vec(frame=i)
             self.class_vecs.append(class_vec_add)
 
-        # Smooth class vectors by averaging every class_smooth_frames frames and interpolating
+        # Smooth class vectors by averaging over frames and interpolating
         if class_smooth_frames > 1:
             class_frames_interp = [
                 np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
@@ -522,159 +550,9 @@ class LucidSonicDream:
                 class_frames_interp, class_smooth_frames, len(self.class_vecs)
             )
 
-        # Convert the lists to numpy arrays for downstream processing
+        # Convert lists to numpy arrays for downstream processing
         self.noise = np.array(self.noise)
         self.class_vecs = np.array(self.class_vecs)
-
-    # def generate_vectors(self):
-    #     """Generates noise and class vectors as inputs for each frame"""
-    #     PULSE_SMOOTH = 0.75
-    #     MOTION_SMOOTH = 0.75
-    #     classes = self.classes
-    #     class_shuffle_seconds = self.class_shuffle_seconds or [0]
-    #     class_shuffle_strength = round(self.class_shuffle_strength * 12)
-    #     fps = self.fps
-    #     class_smooth_frames = self.class_smooth_seconds * fps
-    #     motion_react = self.motion_react * 20 / fps
-
-    #     # Get number of noise vectors to initialize (based on speed_fpm)
-    #     # num_init_noise = round(librosa.get_duration(self.wav, self.sr) / 60 * self.speed_fpm)
-    #     num_init_noise = round(
-    #         librosa.get_duration(y=self.wav, sr=self.sr) / 60 * self.speed_fpm
-    #     )
-
-    #     # If num_init_noise < 2, simply initialize the same
-    #     # noise vector for all frames
-    #     if num_init_noise < 2:
-    #         noise = [
-    #             self.truncation
-    #             * truncnorm.rvs(-2, 2, size=(self.batch_size, self.input_shape)).astype(
-    #                 np.float32
-    #             )[0]
-    #         ] * len(self.spec_norm_class)
-
-    #     # Otherwise, initialize num_init_noise different vectors, and generate
-    #     # linear interpolations between these vectors
-    #     else:
-    #         # Initialize vectors
-    #         init_noise = [
-    #             self.truncation
-    #             * truncnorm.rvs(-2, 2, size=(1, self.input_shape)).astype(np.float32)[0]
-    #             for i in range(num_init_noise)
-    #         ]
-
-    #         # Compute number of steps between each pair of vectors
-    #         steps = int(np.floor(len(self.spec_norm_class)) / len(init_noise) - 1)
-
-    #         # Interpolate
-    #         noise = full_frame_interpolation(
-    #             init_noise, steps, len(self.spec_norm_class)
-    #         )
-
-    #     # Initialize lists of Pulse, Motion, and Class vectors
-    #     pulse_noise = []
-    #     motion_noise = []
-    #     self.class_vecs = []
-
-    #     # Initialize "base" vectors based on Pulse/Motion Reactivity values
-    #     pulse_base = np.array([self.pulse_react] * self.input_shape)
-    #     motion_base = np.array([motion_react] * self.input_shape)
-
-    #     # Randomly initialize "update directions" of noise vectors
-    #     self.motion_signs = np.array(
-    #         [random.choice([1, -1]) for n in range(self.input_shape)]
-    #     )
-
-    #     # Randomly initialize factors based on motion_randomness
-    #     # rand_factors = np.array(
-    #     #     [
-    #     #         random.choice([1, 1 - self.motion_randomness])
-    #     #         for n in range(self.input_shape)
-    #     #     ]
-    #     # )
-    #     rand_factors = np.where(
-    #         np.random.rand(self.input_shape) < 0.5, 1, 1 - self.motion_randomness
-    #     )
-
-    #     cumulative_motion = np.zeros(self.input_shape, dtype=np.float32)
-
-    #     for i in range(len(self.spec_norm_class)):
-    #         # UPDATE NOISE #
-
-    #         # Re-initialize randomness factors every 4 seconds
-
-    #         if i % round(fps * 4) == 0:
-    #             rand_factors = np.where(
-    #                 np.random.rand(self.input_shape) < 0.5,
-    #                 1,
-    #                 1 - self.motion_randomness,
-    #             )
-
-    #         # Generate incremental update vectors for Pulse and Motion
-    #         pulse_noise_add = pulse_base * self.spec_norm_pulse[i]
-    #         motion_noise_add = (
-    #             motion_base
-    #             * self.spec_norm_motion[i]
-    #             * self.motion_signs
-    #             * rand_factors
-    #         )
-
-    #         # Smooth each update vector using a weighted average of
-    #         # itself and the previous vector
-    #         if i > 0:
-    #             pulse_noise_add = pulse_noise[
-    #                 i - 1
-    #             ] * PULSE_SMOOTH + pulse_noise_add * (1 - PULSE_SMOOTH)
-    #             motion_noise_add = motion_noise[
-    #                 i - 1
-    #             ] * MOTION_SMOOTH + motion_noise_add * (1 - MOTION_SMOOTH)
-
-    #         # Append Pulse and Motion update vectors to respective lists
-    #         pulse_noise.append(pulse_noise_add)
-    #         motion_noise.append(motion_noise_add)
-
-    #         # Update current noise vector by adding current Pulse vector and
-    #         # a cumulative sum of Motion vectors
-    #         # noise[i] = noise[i] + pulse_noise_add + sum(motion_noise[: i + 1])
-    #         cumulative_motion += motion_noise_add
-    #         noise[i] = noise[i] + pulse_noise_add + cumulative_motion
-
-    #         self.noise = noise
-    #         self.current_noise = noise[i]
-
-    #         # Update directions
-    #         self.motion_signs = self.update_motion_signs()
-
-    #         # UPDATE CLASSES #
-
-    #         # If current frame is a shuffle frame, shuffle classes accordingly
-    #         if self.is_shuffle_frame(i):
-    #             self.classes = (
-    #                 self.classes[class_shuffle_strength:]
-    #                 + self.classes[:class_shuffle_strength]
-    #             )
-
-    #         # Generate class update vector and append to list
-    #         class_vec_add = self.generate_class_vec(frame=i)
-    #         self.class_vecs.append(class_vec_add)
-
-    #     # Smoothen class vectors by obtaining the mean vector per
-    #     # class_smooth_frames frames, and interpolating between these vectors
-    #     if class_smooth_frames > 1:
-
-    #         # Obtain mean vectors
-    #         class_frames_interp = [
-    #             np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
-    #             for i in range(0, len(self.class_vecs), class_smooth_frames)
-    #         ]
-    #         # Interpolate
-    #         self.class_vecs = full_frame_interpolation(
-    #             class_frames_interp, class_smooth_frames, len(self.class_vecs)
-    #         )
-
-    #     # conver to numpy array:
-    #     self.noise = np.array(self.noise)
-    #     self.class_vecs = np.array(self.class_vecs)
 
     def setup_effects(self):
         """Initializes effects to be applied to each frame"""
