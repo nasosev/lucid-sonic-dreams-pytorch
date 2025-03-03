@@ -2,7 +2,7 @@
 import sys
 import numpy as np
 import cv2
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, VideoClip
 
 
 def upscale_frame(frame, factor=2):
@@ -131,11 +131,40 @@ def process_frame(frame):
     return frame
 
 
+def linear_interpolate_clip(clip):
+    """
+    Create a new clip by linearly interpolating between consecutive frames,
+    effectively doubling the frame rate.
+    """
+
+    def make_frame(t):
+        F = clip.fps
+        frame_duration = 1.0 / F
+        # Determine the surrounding frame times
+        t1 = (int(t * F)) * frame_duration
+        t2 = t1 + frame_duration
+        # If t2 exceeds the clip's duration, just return the last frame.
+        if t2 > clip.duration:
+            return clip.get_frame(t1)
+        # Compute the interpolation weight.
+        weight = (t - t1) / frame_duration
+        frame1 = clip.get_frame(t1).astype(np.float32)
+        frame2 = clip.get_frame(t2).astype(np.float32)
+        frame_interp = (1 - weight) * frame1 + weight * frame2
+        return np.clip(frame_interp, 0, 255).astype(np.uint8)
+
+    new_clip = VideoClip(make_frame, duration=clip.duration)
+    new_clip.fps = clip.fps * 2  # Double the frame rate
+    return new_clip
+
+
 def main(input_file):
     # Load the video clip.
     clip = VideoFileClip(input_file)
-    # Process each frame of the video using the defined pipeline.
-    processed_clip = clip.fl_image(process_frame)
+    # Apply linear frame interpolation to double the frame rate.
+    interpolated_clip = linear_interpolate_clip(clip)
+    # Process each frame with the defined pipeline.
+    processed_clip = interpolated_clip.fl_image(process_frame)
     # Construct the output file name.
     output_file = input_file.rsplit(".", 1)[0] + "_vibed.mp4"
     # Write the processed video to a new file.

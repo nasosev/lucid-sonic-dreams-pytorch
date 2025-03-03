@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     # Generate and save the latent center
     latent_center = generate_random_latent_center(seed=seed_value)
-    latent_radius = 5  # Adjust this value as needed
+    latent_radius = 10  # Adjust this value as needed
     latent_filename = (
         f"latent_vector_seed_{seed_value}.pkl"
         if seed_value is not None
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     L.hallucinate(
         file_name="song.mp4",
         resolution=256,
-        fps=12,
+        fps=24,
         contrast_strength=0.5,
         flash_strength=0.5,
         save_frames=True,
