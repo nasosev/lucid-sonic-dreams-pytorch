@@ -73,6 +73,7 @@ if __name__ == "__main__":
         file_name="song.mp4",
         resolution=256,
         fps=12,
+        speed_fpm=3,  # Even slower scene changes (default is 12)
         contrast_strength=0.5,
         flash_strength=0.5,
         save_frames=True,

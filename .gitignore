@@ -10,3 +10,4 @@ gen.py
 .DS_Store
 *.tiff
 song.wav
+stylegan3/
