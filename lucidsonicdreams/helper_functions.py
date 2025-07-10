@@ -8,7 +8,8 @@ import pandas as pd
 import librosa
 import pygit2
 import gdown
-from mega import Mega
+
+# from mega import Mega
 
 
 def download_weights(url, output):
@@ -17,9 +18,9 @@ def download_weights(url, output):
     if "drive.google.com" in url:
         gdown.download(url, output=output, quiet=False)
 
-    elif "mega.nz" in url:
-        m = Mega()
-        m.login().download_url(url, dest_filename=output)
+    # elif "mega.nz" in url:
+    #     m = Mega()
+    #     m.login().download_url(url, dest_filename=output)
 
     elif "yadi.sk" in url:
         endpoint = (

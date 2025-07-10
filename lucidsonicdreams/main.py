@@ -522,7 +522,8 @@ class LucidSonicDream:
             cumulative_motion += motion_noise_add
             noise[i] = noise[i] + pulse_noise_add + cumulative_motion
             # Constrain the noise to remain within a sphere around latent_center
-            noise[i] = constrain_noise(noise[i], self.latent_center, self.latent_radius)
+            if self.latent_center is not None:
+                noise[i] = constrain_noise(noise[i], self.latent_center, self.latent_radius)
 
             # Update current noise and adjust motion directions
             self.noise = noise

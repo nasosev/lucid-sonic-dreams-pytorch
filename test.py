@@ -33,31 +33,38 @@ def save_latent_vector(latent_vector, filename):
 
 
 if __name__ == "__main__":
-    # Prompt for a seed value to generate a reproducible latent vector.
-    seed_input = input(
-        "Enter a seed for generating the latent vector (or press Enter for random): "
-    ).strip()
-    seed_value = int(seed_input) if seed_input else None
+    # Ask user if they want to use latent vector constraints
+    use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == 'y'
+    
+    latent_center = None
+    latent_radius = None
+    
+    if use_latent:
+        # Prompt for a seed value to generate a reproducible latent vector.
+        seed_input = input(
+            "Enter a seed for generating the latent vector (or press Enter for random): "
+        ).strip()
+        seed_value = int(seed_input) if seed_input else None
 
-    # Generate and save the latent center
-    latent_center = generate_random_latent_center(seed=seed_value)
-    latent_radius = 10  # Adjust this value as needed
-    latent_filename = (
-        f"latent_vector_seed_{seed_value}.pkl"
-        if seed_value is not None
-        else "latent_vector_random.pkl"
-    )
-    save_latent_vector(latent_center, latent_filename)
-    print(f"Latent vector saved to {latent_filename}")
+        # Generate and save the latent center
+        latent_center = generate_random_latent_center(seed=seed_value)
+        latent_radius = 10  # Adjust this value as needed
+        latent_filename = (
+            f"latent_vector_seed_{seed_value}.pkl"
+            if seed_value is not None
+            else "latent_vector_random.pkl"
+        )
+        save_latent_vector(latent_center, latent_filename)
+        print(f"Latent vector saved to {latent_filename}")
 
     # Specify the style weights file (ensure this path is correct)
     filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
 
     start_time = time.time()  # Start tracking time
 
-    # Instantiate LucidSonicDream with the seed-generated latent center and radius.
+    # Instantiate LucidSonicDream with optional latent center and radius.
     L = LucidSonicDream(
-        song="song.mp3",
+        song="song.wav",
         style=filename,
         latent_center=latent_center,
         latent_radius=latent_radius,
@@ -65,7 +72,7 @@ if __name__ == "__main__":
     L.hallucinate(
         file_name="song.mp4",
         resolution=256,
-        fps=24,
+        fps=12,
         contrast_strength=0.5,
         flash_strength=0.5,
         save_frames=True,

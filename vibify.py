@@ -161,14 +161,30 @@ def linear_interpolate_clip(clip):
 def main(input_file):
     # Load the video clip.
     clip = VideoFileClip(input_file)
+
     # Apply linear frame interpolation to double the frame rate.
     interpolated_clip = linear_interpolate_clip(clip)
+
     # Process each frame with the defined pipeline.
     processed_clip = interpolated_clip.fl_image(process_frame)
+
+    # Reapply the original audio BEFORE writing the video
+    processed_clip = processed_clip.set_audio(clip.audio)
+
     # Construct the output file name.
     output_file = input_file.rsplit(".", 1)[0] + "_vibed.mp4"
-    # Write the processed video to a new file.
-    processed_clip.write_videofile(output_file, codec="libx264")
+
+    # Write the processed video to a new file WITH audio.
+    processed_clip.write_videofile(
+        output_file,
+        codec="libx264",
+        audio_codec="aac",
+        audio=True,
+        fps=processed_clip.fps,  # maintain correct fps
+    )
+
+    # Return the processed clip with audio (optional)
+    return processed_clip
 
 
 if __name__ == "__main__":
