@@ -118,6 +118,9 @@ class LucidSonicDream:
         self.latent_center = latent_center
         self.latent_radius = latent_radius
         self.seed = seed
+        
+        # Initialize optimized audio processor
+        self._audio_processor = OptimizedAudioProcessor()
 
         # some stylegan models cannot be converted to pytorch (wikiart)
         self.use_tf = style in ("wikiart",)
@@ -212,79 +215,40 @@ class LucidSonicDream:
             self.num_possible_classes = 0
 
     def load_specs(self):
-        """Load normalized spectrograms and chromagram"""
-
-        start = self.start
-        duration = self.duration
-        fps = self.fps
-        input_shape = self.input_shape
-        pulse_percussive = self.pulse_percussive
-        pulse_harmonic = self.pulse_harmonic
-        motion_percussive = self.motion_percussive
-        motion_harmonic = self.motion_harmonic
-
-        # Load audio signal data
-        wav, sr = librosa.load(self.song, offset=start, duration=duration)
-        wav_motion = wav_pulse = wav_class = wav
-        sr_motion = sr_pulse = sr_class = sr
-
-        # If pulse_percussive != pulse_harmonic
-        # or motion_percussive != motion_harmonic,
-        # decompose harmonic and percussive signals and assign accordingly
-        aud_unassigned = (not self.pulse_audio) or (not self.motion_audio)
-        pulse_bools_equal = pulse_percussive == pulse_harmonic
-        motion_bools_equal = motion_percussive == motion_harmonic
-
-        if aud_unassigned and not all([pulse_bools_equal, motion_bools_equal]):
-            wav_harm, wav_perc = librosa.effects.hpss(wav)
-            wav_list = [wav, wav_harm, wav_perc]
-
-            pulse_bools = [pulse_bools_equal, pulse_harmonic, pulse_percussive]
-            wav_pulse = wav_list[pulse_bools.index(max(pulse_bools))]
-
-            motion_bools = [motion_bools_equal, motion_harmonic, motion_percussive]
-            wav_motion = wav_list[motion_bools.index(max(motion_bools))]
-
-        # Load audio signal data for Pulse, Motion, and Class if provided
-        if self.pulse_audio:
-            wav_pulse, sr_pulse = librosa.load(
-                self.pulse_audio, offset=start, duration=duration
-            )
-        if self.motion_audio:
-            wav_motion, sr_motion = librosa.load(
-                self.motion_audio, offset=start, duration=duration
-            )
-        if self.class_audio:
-            wav_class, sr_class = librosa.load(
-                self.class_audio, offset=start, duration=duration
-            )
-
-        # Calculate frame duration (i.e. samples per frame)
-        frame_duration = int(sr / fps - (sr / fps % 64))
-
-        # Generate normalized spectrograms for Pulse, Motion and Class
-        self.spec_norm_pulse = get_spec_norm(
-            wav_pulse, sr_pulse, input_shape, frame_duration
+        """Load normalized spectrograms and chromagram using optimized audio processing"""
+        
+        logging.info("Loading and processing audio with optimized pipeline...")
+        
+        # Use optimized audio processor
+        audio_result = self._audio_processor.load_and_process_audio(
+            primary_audio=self.song,
+            pulse_audio=self.pulse_audio,
+            motion_audio=self.motion_audio,
+            class_audio=self.class_audio,
+            start=self.start,
+            duration=self.duration,
+            fps=self.fps,
+            input_shape=self.input_shape,
+            pulse_percussive=self.pulse_percussive,
+            pulse_harmonic=self.pulse_harmonic,
+            motion_percussive=self.motion_percussive,
+            motion_harmonic=self.motion_harmonic
         )
-        self.spec_norm_motion = get_spec_norm(
-            wav_motion, sr_motion, input_shape, frame_duration
-        )
-        self.spec_norm_class = get_spec_norm(
-            wav_class, sr_class, input_shape, frame_duration
-        )
-
-        # Generate chromagram from Class audio
-        chrom_class = librosa.feature.chroma_cqt(
-            y=wav_class, sr=sr, hop_length=frame_duration
-        )
-        # Sort pitches based on "dominance"
-        chrom_class_norm = chrom_class / chrom_class.sum(axis=0, keepdims=1)
-        chrom_class_sum = np.sum(chrom_class_norm, axis=1)
-        pitches_sorted = np.argsort(chrom_class_sum)[::-1]
-
-        # Assign attributes to be used for vector generation
-        self.wav, self.sr, self.frame_duration = wav, sr, frame_duration
-        self.chrom_class, self.pitches_sorted = chrom_class, pitches_sorted
+        
+        # Extract results from optimized processor
+        spectrograms = audio_result['spectrograms']
+        self.spec_norm_pulse = spectrograms['spec_norm_pulse']
+        self.spec_norm_motion = spectrograms['spec_norm_motion']
+        self.spec_norm_class = spectrograms['spec_norm_class']
+        
+        self.chrom_class = audio_result['chrom_class']
+        self.pitches_sorted = audio_result['pitches_sorted']
+        self.frame_duration = audio_result['frame_duration']
+        
+        # Keep primary audio for duration calculations
+        self.wav, self.sr = audio_result['primary_audio']
+        
+        logging.info("Audio processing completed successfully")
 
     def transform_classes(self):
         """Transform/assign value of classes"""
@@ -853,7 +817,7 @@ class LucidSonicDream:
                             .numpy()
                         )
                         
-                        # Clear MPS cache to free memory after inference on Apple Silicon
+                        # Clear MPS cache to free memory after inference
                         torch.mps.empty_cache()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
@@ -955,8 +919,8 @@ class LucidSonicDream:
         if batch_size is None:
             self.batch_size = get_optimal_batch_size(
                 model_input_shape=self.input_shape,
-                target_memory_usage=0.75,  # Conservative 75% memory usage
-                max_batch_size=8  # Conservative maximum for stability
+                target_memory_usage=0.8,  # 80% memory usage as requested
+                max_batch_size=8  # Reasonable maximum for M4 16GB
             )
             logging.info(f"Auto-selected batch size: {self.batch_size}")
         else:
