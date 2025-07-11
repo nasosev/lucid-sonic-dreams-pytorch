@@ -19,6 +19,7 @@ from importlib import import_module
 
 from .helper_functions import *
 from .sample_effects import *
+import logging
 
 import cv2
 
@@ -193,7 +194,8 @@ class LucidSonicDream:
                 self.Gs = pickle.load(f)[2]
         else:
             print(f"Loading networks from {weights_file}...")
-            device = torch.device("mps" if torch.mps.is_available() else "cpu")
+            # Apple Silicon MPS device
+            device = torch.device("mps")
             with self.dnnlib.util.open_url(weights_file) as f:
                 self.Gs = self.legacy.load_network_pkl(f)["G_ema"].to(device)  # type: ignore
 
@@ -683,7 +685,8 @@ class LucidSonicDream:
         os.makedirs(self.frames_dir)
 
         # create dataloader
-        device = torch.device("mps" if torch.mps.is_available() else "cpu")
+        # Apple Silicon MPS device
+        device = torch.device("mps")
 
         print("Using device:", device)
         ds = MultiTensorDataset(
@@ -780,13 +783,25 @@ class LucidSonicDream:
         os.makedirs(self.frames_dir)
 
         # Create dataloader from noise and class vectors
-        device = torch.device("mps" if torch.mps.is_available() else "cpu")
+        # Apple Silicon MPS device
+        device = torch.device("mps")
         print("Using device:", device)
         ds = MultiTensorDataset(
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
+        
+        # Determine optimal worker count for data loading
+        optimal_workers = get_optimal_worker_count()
+        
+        # Disable pin_memory for MPS as it's not supported on Apple Silicon
+        use_pin_memory = False
+        
         dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4
+            ds, 
+            batch_size=batch_size, 
+            pin_memory=use_pin_memory, 
+            shuffle=False, 
+            num_workers=optimal_workers
         )
 
         self.final_images = []
@@ -838,9 +853,8 @@ class LucidSonicDream:
                             .numpy()
                         )
                         
-                        # Clear MPS cache to free memory after inference
-                        if torch.mps.is_available():
-                            torch.mps.empty_cache()
+                        # Clear MPS cache to free memory after inference on Apple Silicon
+                        torch.mps.empty_cache()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
                 if batch_size == 1 and image_batch.ndim == 3:
@@ -881,7 +895,7 @@ class LucidSonicDream:
         start: float = 0,
         duration: float = None,
         save_frames: bool = False,
-        batch_size: int = 1,
+        batch_size: int = None,
         speed_fpm: int = 12,
         pulse_percussive: bool = True,
         pulse_harmonic: bool = False,
@@ -936,7 +950,18 @@ class LucidSonicDream:
 
         self.file_name = file_name if file_name[-4:] == ".mp4" else file_name + ".mp4"
         self.resolution = resolution
-        self.batch_size = batch_size
+        
+        # Determine optimal batch size if not provided
+        if batch_size is None:
+            self.batch_size = get_optimal_batch_size(
+                model_input_shape=self.input_shape,
+                target_memory_usage=0.75,  # Conservative 75% memory usage
+                max_batch_size=8  # Conservative maximum for stability
+            )
+            logging.info(f"Auto-selected batch size: {self.batch_size}")
+        else:
+            self.batch_size = batch_size
+            logging.info(f"Using provided batch size: {self.batch_size}")
         self.speed_fpm = speed_fpm
         self.pulse_react = pulse_react
         self.motion_react = motion_react
@@ -957,6 +982,9 @@ class LucidSonicDream:
         # stylegan2 params
         self.truncation_psi = truncation_psi
 
+        # Configure logging to show optimization info
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+        
         # Initialize style
         if not self.style_exists:
             print("Preparing style...")

@@ -4,10 +4,13 @@ import pickle
 import requests
 import json
 import pandas as pd
+import os
+import logging
 
 import librosa
 import pygit2
 import gdown
+import torch
 
 # from mega import Mega
 
@@ -160,3 +163,98 @@ def constrain_noise(noise, center, max_radius):
         # Only scale vectors that exceed max_radius
         scale = np.minimum(1.0, max_radius / np.maximum(norms, 1e-8))
         return center + diff * scale
+
+
+def get_optimal_batch_size(model_input_shape: int = 512, 
+                          target_memory_usage: float = 0.8,
+                          min_batch_size: int = 1,
+                          max_batch_size: int = 16) -> int:
+    """
+    Dynamically determine optimal batch size for Apple Silicon MPS.
+    
+    Args:
+        model_input_shape: Input dimension for StyleGAN (typically 512)
+        target_memory_usage: Target memory utilization (0.8 = 80%)
+        min_batch_size: Minimum allowed batch size
+        max_batch_size: Maximum allowed batch size for stability
+        
+    Returns:
+        Optimal batch size for Apple Silicon system
+    """
+    
+    try:
+        # Try to get system memory using psutil if available
+        try:
+            import psutil
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+        except ImportError:
+            # Fallback: estimate based on common Apple Silicon configurations
+            # This is a reasonable approximation for most systems
+            import subprocess
+            try:
+                # Use system_profiler to get memory info on macOS
+                result = subprocess.run(['system_profiler', 'SPHardwareDataType'], 
+                                      capture_output=True, text=True, timeout=5)
+                if 'Memory:' in result.stdout:
+                    # Parse memory from system_profiler output
+                    lines = result.stdout.split('\n')
+                    for line in lines:
+                        if 'Memory:' in line:
+                            memory_str = line.split(':')[1].strip()
+                            if 'GB' in memory_str:
+                                total_memory_gb = float(memory_str.split()[0])
+                                break
+                    else:
+                        total_memory_gb = 16.0  # Conservative default
+                else:
+                    total_memory_gb = 16.0  # Conservative default
+            except Exception:
+                total_memory_gb = 16.0  # Conservative default
+        
+        # Estimate available MPS memory based on system memory
+        # Apple Silicon M1/M2/M3 use unified memory architecture
+        # Typically allocate 60-80% of system memory to MPS
+        estimated_mps_memory_gb = total_memory_gb * 0.7
+        
+        # Estimate memory per batch for Apple Silicon:
+        # - StyleGAN inference: ~500MB per batch for 512x512
+        # - Additional overhead: ~200MB
+        memory_per_batch_gb = 0.7
+        
+        # Calculate optimal batch size
+        max_batches_by_memory = int(estimated_mps_memory_gb * target_memory_usage / memory_per_batch_gb)
+        optimal_batch_size = min(max(max_batches_by_memory, min_batch_size), max_batch_size)
+        
+        logging.info(f"System memory: {total_memory_gb:.1f}GB, "
+                    f"estimated MPS memory: {estimated_mps_memory_gb:.1f}GB, "
+                    f"optimal batch size: {optimal_batch_size}")
+        
+        return optimal_batch_size
+        
+    except Exception as e:
+        logging.warning(f"Failed to determine optimal batch size: {e}")
+        return min_batch_size
+
+
+def get_optimal_worker_count() -> int:
+    """
+    Determine optimal number of workers for data loading and concurrent processing.
+    
+    Returns:
+        Optimal worker count based on system capabilities
+    """
+    try:
+        # Get CPU count
+        cpu_count = os.cpu_count() or 1
+        
+        # For I/O bound tasks (image saving), use more workers
+        # For CPU bound tasks, use fewer to avoid context switching overhead
+        # Conservative approach: use 75% of available cores, minimum 2, maximum 8
+        optimal_workers = min(max(int(cpu_count * 0.75), 2), 8)
+        
+        logging.info(f"System has {cpu_count} CPUs, using {optimal_workers} workers")
+        return optimal_workers
+        
+    except Exception as e:
+        logging.warning(f"Failed to determine optimal worker count: {e}")
+        return 4  # Fallback to reasonable default
