@@ -34,11 +34,11 @@ def save_latent_vector(latent_vector, filename):
 
 if __name__ == "__main__":
     # Ask user if they want to use latent vector constraints
-    use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == 'y'
-    
+    use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == "y"
+
     latent_center = None
     latent_radius = None
-    
+
     if use_latent:
         # Prompt for a seed value to generate a reproducible latent vector.
         seed_input = input(
@@ -72,8 +72,13 @@ if __name__ == "__main__":
     L.hallucinate(
         file_name="song.mp4",
         resolution=256,
-        fps=12,
+        fps=24,
         speed_fpm=3,  # Even slower scene changes (default is 12)
+        pulse_react=0.3,  # Gentler pulse reactions (default is 0.5)
+        motion_react=0.3,  # Gentler motion reactions (default is 0.5)
+        class_smooth_seconds=3,  # Smoother class transitions (default is 1)
+        motion_randomness=0.3,  # Less random motion (default is 0.5)
+        class_pitch_react=0.3,  # Gentler class reactions (default is 0.5)
         contrast_strength=0.5,
         flash_strength=0.5,
         save_frames=True,
