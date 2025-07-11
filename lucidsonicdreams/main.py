@@ -82,6 +82,7 @@ class LucidSonicDream:
         num_possible_classes: int = None,
         latent_center: np.ndarray = None,  # New optional parameter
         latent_radius: float = None,  # New optional parameter
+        seed: int = None,  # New optional parameter for reproducibility
     ):
         # If style is a function, raise exception if function does not take
         # noise_batch or class_batch parameters
@@ -115,6 +116,7 @@ class LucidSonicDream:
         # Add new latent space exploration parameters
         self.latent_center = latent_center
         self.latent_radius = latent_radius
+        self.seed = seed
 
         # some stylegan models cannot be converted to pytorch (wikiart)
         self.use_tf = style in ("wikiart",)
@@ -405,6 +407,11 @@ class LucidSonicDream:
         class_shuffle_strength = round(self.class_shuffle_strength * 12)
         motion_react = self.motion_react * 20 / fps
 
+        # Set random seed for reproducibility if provided
+        if self.seed is not None:
+            np.random.seed(self.seed)
+            random.seed(self.seed)
+        
         # Determine number of distinct noise vectors based on speed_fpm and audio duration
         duration_seconds = librosa.get_duration(y=self.wav, sr=self.sr)
         num_init_noise = round(duration_seconds / 60 * self.speed_fpm)
@@ -811,13 +818,9 @@ class LucidSonicDream:
                         image_batch = np.array(image_batch)
                     else:
                         # For PyTorch: move to device and run synthesis with no_grad
-                        # Convert once using torch.tensor, ensuring the target device is specified
-                        noise_tensor = torch.tensor(
-                            noise_batch, device=device, dtype=torch.float32
-                        )
-                        class_tensor = torch.tensor(
-                            class_batch, device=device, dtype=torch.float32
-                        )
+                        # Use .to() for existing tensors instead of torch.tensor()
+                        noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
+                        class_tensor = class_batch.to(device=device, dtype=torch.float32)
                         with torch.no_grad():
                             w_batch = self.Gs.mapping(
                                 noise_tensor,
@@ -833,6 +836,10 @@ class LucidSonicDream:
                             .cpu()
                             .numpy()
                         )
+                        
+                        # Clear MPS cache to free memory after inference
+                        if torch.mps.is_available():
+                            torch.mps.empty_cache()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
                 if batch_size == 1 and image_batch.ndim == 3:

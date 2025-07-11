@@ -1,5 +1,6 @@
 import time
 import os
+import sys
 import numpy as np
 from scipy.stats import truncnorm
 import pickle
@@ -33,11 +34,20 @@ def save_latent_vector(latent_vector, filename):
 
 
 if __name__ == "__main__":
+    # Get input filename from command line argument or use default
+    if len(sys.argv) > 1:
+        input_audio = sys.argv[1]
+        print(f"Using input audio file: {input_audio}")
+    else:
+        input_audio = "sample.mp3"
+        print(f"No input file specified, using default: {input_audio}")
+    
     # Ask user if they want to use latent vector constraints
     use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == "y"
 
     latent_center = None
     latent_radius = None
+    seed_value = None
 
     if use_latent:
         # Prompt for a seed value to generate a reproducible latent vector.
@@ -56,18 +66,27 @@ if __name__ == "__main__":
         )
         save_latent_vector(latent_center, latent_filename)
         print(f"Latent vector saved to {latent_filename}")
+    else:
+        # Ask for seed even when not using latent constraints for reproducibility
+        seed_input = input(
+            "Enter a seed for reproducible generation (or press Enter for random): "
+        ).strip()
+        seed_value = int(seed_input) if seed_input else None
+        if seed_value is not None:
+            print(f"Using seed: {seed_value}")
 
     # Specify the style weights file (ensure this path is correct)
     filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
 
     start_time = time.time()  # Start tracking time
 
-    # Instantiate LucidSonicDream with optional latent center and radius.
+    # Instantiate LucidSonicDream with optional latent center, radius, and seed
     L = LucidSonicDream(
-        song="song.wav",
+        song=input_audio,
         style=filename,
         latent_center=latent_center,
         latent_radius=latent_radius,
+        seed=seed_value,
     )
     L.hallucinate(
         file_name="song.mp4",
