@@ -117,17 +117,7 @@ def full_frame_interpolation(frame_init, steps, len_output):
 
 
 def slerp(val, low, high):
-    """Spherical linear interpolation. Supports both single vectors and batches."""
-    # Handle batch operations
-    if isinstance(val, (list, np.ndarray)) and np.array(val).ndim > 0:
-        # Batch case: val is array of interpolation parameters
-        val = np.array(val)
-        result = np.zeros((len(val),) + low.shape)
-        for i, v in enumerate(val):
-            result[i] = slerp(v, low, high)
-        return result
-    
-    # Single interpolation case (original behavior)
+    """Spherical linear interpolation."""
     low_norm = low / np.linalg.norm(low)
     high_norm = high / np.linalg.norm(high)
     dot = np.clip(np.dot(low_norm, high_norm), -1.0, 1.0)
@@ -145,18 +135,9 @@ def generate_narrow_perturbation(latent_dim, scale=1e-4):
 
 def constrain_noise(noise, center, max_radius):
     """Project `noise` back into a sphere of radius `max_radius` around `center`."""
-    # Handle both single vectors and batches of vectors
-    if noise.ndim == 1:
-        # Single vector case (original behavior)
-        diff = noise - center
-        norm = np.linalg.norm(diff)
-        if norm > max_radius:
-            diff = diff / norm * max_radius
-        return center + diff
-    else:
-        # Vectorized batch case
-        diff = noise - center
-        norms = np.linalg.norm(diff, axis=-1, keepdims=True)
-        # Only scale vectors that exceed max_radius
-        scale = np.minimum(1.0, max_radius / np.maximum(norms, 1e-8))
-        return center + diff * scale
+    diff = noise - center
+    norm = np.linalg.norm(diff)
+
+    if norm > max_radius:
+        diff = diff / norm * max_radius
+    return center + diff

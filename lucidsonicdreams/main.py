@@ -340,7 +340,7 @@ class LucidSonicDream:
         # For the first class vector, simple use values from
         # the first point in time where at least one pitch > 0
         # (controls for silence at the start of a track)
-        if len(class_vecs) == 0:
+        if frame == 0:
 
             first_chrom = chrom_class[:, np.min(np.where(chrom_class.sum(axis=0) > 0))]
             update_dict = dict(zip(classes, first_chrom))
@@ -477,14 +477,14 @@ class LucidSonicDream:
                 steps = int(np.floor(num_frames / len(init_noise)) - 1)
                 noise = full_frame_interpolation(init_noise, steps, num_frames)
 
-        # Initialize lists for incremental updates and class vectors
-        pulse_noise = []
-        motion_noise = []
-        self.class_vecs = []
+        # Pre-allocate arrays for incremental updates and class vectors
+        pulse_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
+        motion_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
+        self.class_vecs = np.zeros((num_frames, self.num_possible_classes), dtype=np.float32)
 
         # Base vectors for Pulse and Motion updates
-        pulse_base = np.array([self.pulse_react] * self.input_shape)
-        motion_base = np.array([motion_react] * self.input_shape)
+        pulse_base = np.full(self.input_shape, self.pulse_react, dtype=np.float32)
+        motion_base = np.full(self.input_shape, motion_react, dtype=np.float32)
 
         # Initialize update directions and randomness factors
         self.motion_signs = np.array(
@@ -522,8 +522,8 @@ class LucidSonicDream:
                     i - 1
                 ] * MOTION_SMOOTH + motion_noise_add * (1 - MOTION_SMOOTH)
 
-            pulse_noise.append(pulse_noise_add)
-            motion_noise.append(motion_noise_add)
+            pulse_noise[i] = pulse_noise_add
+            motion_noise[i] = motion_noise_add
 
             # Accumulate motion noise and update the base noise vector
             cumulative_motion += motion_noise_add
@@ -546,7 +546,7 @@ class LucidSonicDream:
 
             # Generate and store the class update vector for this frame
             class_vec_add = self.generate_class_vec(frame=i)
-            self.class_vecs.append(class_vec_add)
+            self.class_vecs[i] = class_vec_add
 
         # Smooth class vectors by averaging over frames and interpolating
         if class_smooth_frames > 1:
@@ -554,13 +554,14 @@ class LucidSonicDream:
                 np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
                 for i in range(0, len(self.class_vecs), class_smooth_frames)
             ]
-            self.class_vecs = full_frame_interpolation(
+            smoothed_class_vecs = full_frame_interpolation(
                 class_frames_interp, class_smooth_frames, len(self.class_vecs)
             )
+            self.class_vecs = np.array(smoothed_class_vecs)
 
-        # Convert lists to numpy arrays for downstream processing
+        # Convert noise list to numpy array for downstream processing
         self.noise = np.array(self.noise)
-        self.class_vecs = np.array(self.class_vecs)
+        # self.class_vecs is already a numpy array from pre-allocation
 
     def setup_effects(self):
         """Initializes effects to be applied to each frame"""
