@@ -34,14 +34,22 @@ def save_latent_vector(latent_vector, filename):
 
 
 if __name__ == "__main__":
-    # Get input filename from command line argument or use default
+    # Get input filename and optional layer from command line arguments
     if len(sys.argv) > 1:
         input_audio = sys.argv[1]
         print(f"Using input audio file: {input_audio}")
     else:
         input_audio = "sample.mp3"
         print(f"No input file specified, using default: {input_audio}")
-    
+
+    # Check for layer capture argument
+    capture_layer = None
+    if len(sys.argv) > 2:
+        capture_layer = sys.argv[2]
+        print(f"Using layer capture: {capture_layer}")
+        # Add the simple layer extraction patch
+        exec(open("simple_layer_patch.py").read())
+
     # Ask user if they want to use latent vector constraints
     use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == "y"
 
@@ -76,7 +84,8 @@ if __name__ == "__main__":
             print(f"Using seed: {seed_value}")
 
     # Specify the style weights file (ensure this path is correct)
-    filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
+    # Use face model for psychedelic portrait effects
+    filename = "models/stylegan3-r-afhqv2-512x512.pkl"
 
     start_time = time.time()  # Start tracking time
 
@@ -88,20 +97,29 @@ if __name__ == "__main__":
         latent_radius=latent_radius,
         seed=seed_value,
     )
-    L.hallucinate(
-        file_name="song.mp4",
-        resolution=256,
-        fps=24,
-        speed_fpm=3,  # Even slower scene changes (default is 12)
-        pulse_react=0.3,  # Gentler pulse reactions (default is 0.5)
-        motion_react=0.3,  # Gentler motion reactions (default is 0.5)
-        class_smooth_seconds=3,  # Smoother class transitions (default is 1)
-        motion_randomness=0.3,  # Less random motion (default is 0.5)
-        class_pitch_react=0.3,  # Gentler class reactions (default is 0.5)
-        contrast_strength=0.5,
-        flash_strength=0.5,
-        save_frames=True,
-    )
+    # Build hallucinate parameters
+    hallucinate_params = {
+        "file_name": "song.mp4",
+        "resolution": 512,
+        "fps": 24,
+        "speed_fpm": 3,  # Even slower scene changes (default is 12)
+        "pulse_react": 0.3,  # Gentler pulse reactions (default is 0.5)
+        "motion_react": 0.3,  # Gentler motion reactions (default is 0.5)
+        "class_smooth_seconds": 3,  # Smoother class transitions (default is 1)
+        "motion_randomness": 0.3,  # Less random motion (default is 0.5)
+        "class_pitch_react": 0.3,  # Gentler class reactions (default is 0.5)
+        "contrast_strength": 0.5,
+        "flash_strength": 0.5,
+        "batch_size": 1,  # Force batch size 1 for consistent colors
+        "save_frames": True,
+    }
+
+    # Add layer capture if specified
+    if capture_layer:
+        hallucinate_params["capture_layer"] = capture_layer
+        print(f"🎨 Generating psychedelic video with layer: {capture_layer}")
+
+    L.hallucinate(**hallucinate_params)
 
     end_time = time.time()  # End tracking time
     total_time = end_time - start_time

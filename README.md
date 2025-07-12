@@ -5,6 +5,122 @@
 - This fork makes minimal changes for Apple Silicon MPS support but removes CUDA support.
 - Verified to work on Apple M4 2024, macOS 15.3.1.
 
+## 🧠 Psychedelic Layer Visualization (New!)
+
+This fork introduces the ability to capture and visualize intermediate layers from the StyleGAN3 neural network, revealing the AI's internal "thought process" as it generates images. Instead of seeing only the final polished output, you can explore the abstract patterns, geometric forms, and surreal artifacts that exist within the network's hidden layers.
+
+### Basic Usage
+
+```bash
+# Normal generation (final layer)
+python test.py sample.mp3
+
+# Psychedelic generation (intermediate layer)
+python test.py sample.mp3 L2_36_512
+```
+
+### Example Workflows
+
+#### 1. Pure Abstract Art (Early Layers)
+```bash
+# Mathematical flowing forms
+python test.py mystical_ambient.mp3 L0_36_512
+
+# Geometric color blobs  
+python test.py electronic_beat.mp3 L2_36_512
+
+# Primitive shape formation
+python test.py jazz_improv.mp3 L4_52_512
+```
+
+#### 2. Surreal Landscapes (Mid Layers)
+```bash
+# Dream-like natural scenes
+python test.py atmospheric_music.mp3 L8_148_512
+
+# Complex surreal environments
+python test.py psychedelic_rock.mp3 L9_148_362
+
+# Detailed but distorted landscapes
+python test.py ambient_drone.mp3 L10_276_256
+```
+
+#### 3. Subtle Psychedelia (Late Layers)
+```bash
+# Nearly normal with AI artifacts
+python test.py classical_piece.mp3 L13_256_128
+
+# Recommended: Best balance of detail and psychedelia
+python test.py any_music.mp3 L14_256_3
+```
+
+#### 4. Visualization Comparison
+```bash
+# Create 4 different visualization methods for any layer
+python better_visualization.py L8_148_512
+python better_visualization.py L2_36_512
+python better_visualization.py L14_256_3
+```
+
+### Programming Interface
+
+```python
+from lucidsonicdreams import LucidSonicDream
+
+# Load the layer capture functionality
+exec(open('direct_patch.py').read())
+
+# Create instance
+L = LucidSonicDream(song="music.mp3", style="models/lhq-256-stylegan3-t-25Mimg.pkl")
+
+# Generate with layer capture
+L.hallucinate(
+    file_name="psychedelic_output.mp4",
+    resolution=256,
+    fps=24,
+    capture_layer="L8_148_512"  # Specify any layer
+)
+```
+
+### Complete Layer Catalog
+
+The StyleGAN3 network contains 15 main layers (L0-L14), each producing different levels of abstraction:
+
+#### Early Layers (Abstract Geometric Patterns)
+- **L0_36_512** - First layer: Pure mathematical abstractions, flowing geometric forms
+- **L1_36_512** - Basic pattern formation, color gradients
+- **L2_36_512** - Blob-like forms, primary color relationships
+- **L3_52_512** - Early shape recognition, basic textures
+- **L4_52_512** - Primitive landscape elements, horizon hints
+
+#### Mid Layers (Recognizable but Surreal)
+- **L5_84_512** - Abstract landscapes with geological patterns
+- **L6_84_512** - Natural forms emerge: rocks, clouds, water
+- **L7_148_512** - More detailed terrain, atmospheric effects
+- **L8_148_512** - Recognizable landscapes with dream-like distortions
+- **L9_148_362** - Complex natural scenes with surreal elements
+
+#### Late Layers (Detailed but Psychedelic)
+- **L10_276_256** - Highly detailed landscapes with neural artifacts
+- **L11_276_181** - Near-photorealistic with AI "hallucinations"
+- **L12_276_128** - Complex scenes with subtle distortions
+- **L13_256_128** - Almost final quality with minor neural effects
+- **L14_256_3** - **Penultimate layer**: Final landscapes with subtle AI artifacts (recommended for psychedelic effects)
+
+### Recommended Layers for Different Effects
+
+- **Pure Abstraction**: L0, L1, L2 - Mathematical forms and color flows
+- **Geometric Psychedelia**: L3, L4, L5 - Shape formation and primitive landscapes  
+- **Surreal Landscapes**: L8, L9, L10 - Recognizable but dream-like scenes
+- **Subtle Psychedelia**: L13, L14 - Nearly normal with AI artifacts
+
+### Advanced Visualization Ideas
+
+1. **Layer Morphing**: Blend multiple layers for complex effects
+2. **Temporal Layer Switching**: Change layers based on audio intensity
+3. **Multi-layer Compositing**: Overlay different abstraction levels
+4. **Layer-specific Color Grading**: Apply different effects to different layers
+
 ## Resources
 
 -[NVlabs StyleGAN3](https://github.com/NVlabs/stylegan3)
