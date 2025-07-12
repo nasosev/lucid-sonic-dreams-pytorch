@@ -18,7 +18,7 @@ os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 from lucidsonicdreams import LucidSonicDream
 
 def reduce_channels_pca(tensor, target_size=256, n_components=3):
-    """Clean PCA reduction with upscaling"""
+    """Clean PCA reduction with upscaling - per-batch for maximum visual richness"""
     if tensor.ndim != 4:
         if tensor.ndim == 2 and tensor.shape[0] == 1:
             # Affine layer visualization
@@ -46,24 +46,40 @@ def reduce_channels_pca(tensor, target_size=256, n_components=3):
         return torch.zeros(1, 3, target_size, target_size, device=tensor.device)
     
     batch, channels, height, width = tensor.shape
-    print(f"🎨 Processing batch of {batch} images: {channels} channels at {height}x{width} -> RGB at {target_size}x{target_size}")
     
-    # Process each item in the batch
-    batch_results = []
-    
-    for b in range(batch):
-        # PCA reduction for this batch item
-        reshaped = tensor[b].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
-        pca = PCA(n_components=n_components)
-        reduced = pca.fit_transform(reshaped)
-        reduced = reduced.reshape(height, width, n_components)
+    # Special handling for 3-channel layers (already RGB-like)
+    if channels == 3:
+        print(f"🎨 3-channel layer detected - using direct RGB mapping (no PCA needed)")
+        rgb_tensor = tensor.clone()
+    else:
+        print(f"🎨 Per-batch PCA for maximum visual richness: {batch} images, {channels} channels at {height}x{width}")
         
-        # Convert to tensor: [n_components, height, width]
-        item_tensor = torch.from_numpy(reduced).permute(2, 0, 1).float().to(tensor.device)
-        batch_results.append(item_tensor)
-    
-    # Stack batch results: [batch, n_components, height, width]
-    rgb_tensor = torch.stack(batch_results, dim=0)
+        # Collect all batch data for per-batch PCA fitting
+        all_batch_data = []
+        for b in range(batch):
+            reshaped = tensor[b].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
+            all_batch_data.append(reshaped)
+        
+        # Concatenate all batch data and fit fresh PCA model for this batch
+        combined_data = np.concatenate(all_batch_data, axis=0)  # [total_pixels, channels]
+        pca = PCA(n_components=n_components)
+        pca.fit(combined_data)
+        
+        print(f"   🌈 Fresh PCA fitted - adaptive to this batch's content for richer detail!")
+        
+        # Apply the batch-specific PCA transform to each batch item
+        batch_results = []
+        for b in range(batch):
+            # Transform using the batch-specific PCA model
+            reduced = pca.transform(all_batch_data[b])
+            reduced = reduced.reshape(height, width, n_components)
+            
+            # Convert to tensor: [n_components, height, width]
+            item_tensor = torch.from_numpy(reduced).permute(2, 0, 1).float().to(tensor.device)
+            batch_results.append(item_tensor)
+        
+        # Stack batch results: [batch, n_components, height, width]
+        rgb_tensor = torch.stack(batch_results, dim=0)
     
     # Normalize
     for i in range(n_components):

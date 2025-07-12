@@ -110,7 +110,7 @@ if __name__ == "__main__":
         "class_pitch_react": 0.3,  # Gentler class reactions (default is 0.5)
         "contrast_strength": 0.5,
         "flash_strength": 0.5,
-        "batch_size": 4,  # Higher batch size for better performance
+        "batch_size": 8,  # Higher batch size for better performance
         "save_frames": True,
     }
 
