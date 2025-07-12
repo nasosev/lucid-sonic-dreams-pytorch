@@ -85,7 +85,7 @@ if __name__ == "__main__":
 
     # Specify the style weights file (ensure this path is correct)
     # Use face model for psychedelic portrait effects
-    filename = "models/stylegan3-r-afhqv2-512x512.pkl"
+    filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
 
     start_time = time.time()  # Start tracking time
 
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     # Build hallucinate parameters
     hallucinate_params = {
         "file_name": "song.mp4",
-        "resolution": 512,
+        "resolution": 256,
         "fps": 24,
         "speed_fpm": 3,  # Even slower scene changes (default is 12)
         "pulse_react": 0.3,  # Gentler pulse reactions (default is 0.5)
