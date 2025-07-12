@@ -43,8 +43,12 @@ if __name__ == "__main__":
         print("Examples:")
         print("  python dream.py                                    # Use defaults")
         print("  python dream.py my_song.mp3                        # Use custom audio")
-        print("  python dream.py --layer L12_276_128                # Psychedelic layer")
-        print("  python dream.py my_song.mp3 --layer L8_276_645 --seed 42  # Full control")
+        print(
+            "  python dream.py --layer L12_276_128                # Psychedelic layer"
+        )
+        print(
+            "  python dream.py my_song.mp3 --layer L8_276_645 --seed 42  # Full control"
+        )
         print()
         print("Defaults: audio=sample.mp3, model=lhq-256, layer=final, seed=random")
         print()
@@ -53,20 +57,39 @@ if __name__ == "__main__":
 
     # Parse all arguments properly with argparse
     import argparse
-    
-    parser = argparse.ArgumentParser(description='Generate psychedelic videos from audio using StyleGAN layer extraction')
-    parser.add_argument('audio_file', nargs='?', default='sample.mp3', help='Input audio file (default: sample.mp3)')
-    parser.add_argument('--layer', help='StyleGAN layer to extract (default: final layer)')
-    parser.add_argument('--model', default='lhq-256-stylegan3-t-25Mimg.pkl', help='StyleGAN model file (default: lhq-256-stylegan3-t-25Mimg.pkl)')
-    parser.add_argument('--latent', action='store_true', help='Use latent vector constraints')
-    parser.add_argument('--seed', type=int, help='Random seed for reproducible generation (default: random)')
-    
+
+    parser = argparse.ArgumentParser(
+        description="Generate psychedelic videos from audio using StyleGAN layer extraction"
+    )
+    parser.add_argument(
+        "audio_file",
+        nargs="?",
+        default="sample.mp3",
+        help="Input audio file (default: sample.mp3)",
+    )
+    parser.add_argument(
+        "--layer", help="StyleGAN layer to extract (default: final layer)"
+    )
+    parser.add_argument(
+        "--model",
+        default="lhq-256-stylegan3-t-25Mimg.pkl",
+        help="StyleGAN model file (default: lhq-256-stylegan3-t-25Mimg.pkl)",
+    )
+    parser.add_argument(
+        "--latent", action="store_true", help="Use latent vector constraints"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Random seed for reproducible generation (default: random)",
+    )
+
     args = parser.parse_args()
-    
+
     # Get audio file
     input_audio = args.audio_file
     print(f"Using input audio file: {input_audio}")
-    
+
     # Get layer capture argument (optional)
     capture_layer = args.layer
     if capture_layer:
@@ -76,7 +99,7 @@ if __name__ == "__main__":
 
     # Get model file (with default)
     filename = f"models/{args.model}"
-    if args.model == 'lhq-256-stylegan3-t-25Mimg.pkl':
+    if args.model == "lhq-256-stylegan3-t-25Mimg.pkl":
         print(f"Using default model: {args.model}")
     else:
         print(f"Using model: {args.model}")
@@ -130,7 +153,7 @@ if __name__ == "__main__":
         "class_pitch_react": 0.3,  # Gentler class reactions (default is 0.5)
         "contrast_strength": 0.5,
         "flash_strength": 0.5,
-        "batch_size": 4,
+        "batch_size": 8,
         "save_frames": True,
     }
 
