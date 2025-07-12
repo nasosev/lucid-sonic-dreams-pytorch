@@ -46,15 +46,24 @@ def reduce_channels_pca(tensor, target_size=256, n_components=3):
         return torch.zeros(1, 3, target_size, target_size, device=tensor.device)
     
     batch, channels, height, width = tensor.shape
-    print(f"🎨 Processing {channels} channels at {height}x{width} -> RGB at {target_size}x{target_size}")
+    print(f"🎨 Processing batch of {batch} images: {channels} channels at {height}x{width} -> RGB at {target_size}x{target_size}")
     
-    # PCA reduction
-    reshaped = tensor[0].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
-    pca = PCA(n_components=n_components)
-    reduced = pca.fit_transform(reshaped)
-    reduced = reduced.reshape(height, width, n_components)
+    # Process each item in the batch
+    batch_results = []
     
-    rgb_tensor = torch.from_numpy(reduced).permute(2, 0, 1).unsqueeze(0).float().to(tensor.device)
+    for b in range(batch):
+        # PCA reduction for this batch item
+        reshaped = tensor[b].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
+        pca = PCA(n_components=n_components)
+        reduced = pca.fit_transform(reshaped)
+        reduced = reduced.reshape(height, width, n_components)
+        
+        # Convert to tensor: [n_components, height, width]
+        item_tensor = torch.from_numpy(reduced).permute(2, 0, 1).float().to(tensor.device)
+        batch_results.append(item_tensor)
+    
+    # Stack batch results: [batch, n_components, height, width]
+    rgb_tensor = torch.stack(batch_results, dim=0)
     
     # Normalize
     for i in range(n_components):
