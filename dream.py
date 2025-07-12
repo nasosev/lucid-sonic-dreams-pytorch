@@ -83,6 +83,11 @@ if __name__ == "__main__":
         type=int,
         help="Random seed for reproducible generation (default: random)",
     )
+    parser.add_argument(
+        "--pca",
+        default="rbg",
+        help="PCA component order for RGB channels (default: rbg). Examples: rgb, grb, gbr, brg, bgr",
+    )
 
     args = parser.parse_args()
 
@@ -92,8 +97,12 @@ if __name__ == "__main__":
 
     # Get layer capture argument (optional)
     capture_layer = args.layer
+    pca_order = args.pca.lower()
     if capture_layer:
         print(f"Using layer capture: {capture_layer}")
+        print(f"Using PCA component order: {pca_order}")
+        # Set PCA order globally for the patch
+        globals()["PCA_ORDER"] = pca_order
         # Add the fast layer extraction patch (optimized for performance)
         exec(open("fast_layer_patch.py").read())
 
@@ -144,16 +153,16 @@ if __name__ == "__main__":
     # Build hallucinate parameters
     hallucinate_params = {
         "file_name": "song.mp4",
-        "fps": 24,
+        "fps": 12,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
-        "pulse_react": 0.3,  # Gentler pulse reactions (default is 0.5)
-        "motion_react": 0.3,  # Gentler motion reactions (default is 0.5)
-        "class_smooth_seconds": 3,  # Smoother class transitions (default is 1)
-        "motion_randomness": 0.3,  # Less random motion (default is 0.5)
-        "class_pitch_react": 0.3,  # Gentler class reactions (default is 0.5)
-        "contrast_strength": 0.5,
-        "flash_strength": 0.5,
-        "batch_size": 8,
+        "pulse_react": 0.25,  # Gentler pulse reactions (default is 0.5)
+        "motion_react": 0.25,  # Gentler motion reactions (default is 0.5)
+        "class_smooth_seconds": 2,  # Smoother class transitions (default is 1)
+        "motion_randomness": 0.25,  # Less random motion (default is 0.5)
+        "class_pitch_react": 0.25,  # Gentler class reactions (default is 0.5)
+        "contrast_strength": 0.25,
+        "flash_strength": 0.25,
+        "batch_size": 1,
         "save_frames": True,
     }
 

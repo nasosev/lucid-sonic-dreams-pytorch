@@ -16,16 +16,33 @@ os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
 from lucidsonicdreams import LucidSonicDream
 
+def apply_pca_reordering(tensor, pca_order="rbg"):
+    """Apply PCA component reordering based on specified order"""
+    if pca_order == "rbg":
+        return tensor[:, [0, 2, 1], :, :]  # Default order: [0,2,1] -> [R,B,G]
+    if pca_order == "rgb":
+        return tensor  # Natural order: [0,1,2] -> [R,G,B]
+    
+    # Create mapping from letter to component index
+    order_map = {'r': 0, 'g': 1, 'b': 2}
+    
+    # Validate order string
+    if len(pca_order) != 3 or set(pca_order) != {'r', 'g', 'b'}:
+        print(f"Warning: Invalid PCA order '{pca_order}', using default 'rgb'")
+        return tensor
+    
+    # Create reordering indices
+    indices = [order_map[c] for c in pca_order]
+    
+    # Reorder channels: tensor is [batch, n_components, height, width]
+    return tensor[:, indices, :, :]
+
 def reduce_channels_pca_fast(tensor, n_components=3):
     """Fast PCA reduction - optimized for performance"""
     if tensor.ndim != 4:
         return None
     
     batch, channels, height, width = tensor.shape
-    
-    # Special handling for 3-channel layers (already RGB-like)
-    if channels == 3:
-        return tensor.clone()
     
     # Collect all batch data for per-batch PCA fitting (preserve spatial structure)
     all_batch_data = []
@@ -51,6 +68,10 @@ def reduce_channels_pca_fast(tensor, n_components=3):
     
     # Stack batch results: [batch, n_components, height, width]
     rgb_tensor = torch.stack(batch_results, dim=0)
+    
+    # Apply PCA reordering if specified
+    if 'PCA_ORDER' in globals():
+        rgb_tensor = apply_pca_reordering(rgb_tensor, globals()['PCA_ORDER'])
     
     # Fast vectorized normalization (all channels at once)
     rgb_flat = rgb_tensor.view(batch, n_components, -1)  # [batch, channels, pixels]
