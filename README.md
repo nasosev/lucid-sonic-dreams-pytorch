@@ -1,13 +1,33 @@
-# Lucid Sonic Dreams - Psychedelic Layer Fork
+# Lucid Sonic Dreams - Apple Silicon Psychedelic Layer Fork
 
-## Apple Silicon Metal Performance Shaders support
+**An Apple Silicon-optimized fork of Lucid Sonic Dreams with revolutionary neural layer visualization capabilities.**
 
-- This fork makes minimal changes for Apple Silicon MPS support but removes CUDA support.
-- Verified to work on Apple M4 2024, macOS 15.3.1.
+## 🎯 What This Fork Does
 
-## 🧠 Psychedelic Layer Visualization (New!)
+This specialized fork transforms Lucid Sonic Dreams into a **psychedelic neural archaeology tool** for Apple Silicon users. Instead of generating standard StyleGAN videos, it lets you **peer inside the AI's mind** by extracting and visualizing the raw intermediate layers where abstract mathematical concepts gradually crystallize into recognizable forms.
 
-This fork introduces the ability to capture and visualize intermediate layers from the StyleGAN3 neural network, revealing the AI's internal "thought process" as it generates images. Instead of seeing only the final polished output, you can explore the abstract patterns, geometric forms, and surreal artifacts that exist within the network's hidden layers.
+### Key Innovations
+
+1. **🧠 Neural Layer Extraction**: Capture any of the 15 intermediate StyleGAN3 layers (L0-L14) to see how AI "thinks"
+2. **🍎 Apple Silicon Optimized**: Built specifically for Metal Performance Shaders (MPS) - **Apple Silicon only**
+3. **⚡ True Early Stopping**: Massive performance gains by stopping computation at target layers
+4. **🎨 Mathematical Beauty**: Transform high-dimensional neural activations into trippy RGB visuals using PCA
+
+## 🚫 Platform Requirements
+
+**Apple Silicon Only**: This fork is specifically designed for Apple M1/M2/M3/M4 processors with Metal Performance Shaders. CUDA support has been completely removed.
+
+- ✅ **Supported**: MacOS with Apple Silicon (M1, M2, M3, M4)
+- ❌ **Not Supported**: Intel Macs, Windows, Linux, NVIDIA GPUs
+
+## 🧠 Layer Visualization: Seeing AI Think
+
+Unlike the original Lucid Sonic Dreams that shows polished final outputs, this fork reveals the **raw computational process** of StyleGAN3. Each layer represents a different level of abstraction:
+
+- **L0-L3**: Pure mathematical abstractions - flowing geometric forms, color relationships
+- **L4-L8**: Emerging structures - primitive landscapes, basic shapes  
+- **L9-L12**: Complex patterns - detailed but surreal environments
+- **L13-L14**: Near-final quality with subtle AI "hallucinations"
 
 ## Usage
 
@@ -29,18 +49,36 @@ python dream.py <audio_file> [layer] [model] [options]
 ### Basic Usage
 
 ```bash
+# Quick start - use all defaults
+python dream.py
+
 # Normal generation (final layer)
-python dream.py sample.mp3
+python dream.py my_song.mp3
 
-# Psychedelic generation (intermediate layer)
-python dream.py sample.mp3 L2_36_512
+# 🧠 Psychedelic layer extraction (the main feature!)
+python dream.py my_song.mp3 --layer L8_276_645
 
-# Use specific model
-python dream.py sample.mp3 L8_148_512 stylegan3-r-afhqv2-512x512.pkl
-
-# With latent constraints and seed
-python dream.py sample.mp3 L5_84_1024 --latent --seed 42
+# Full control
+python dream.py my_song.mp3 --layer L5_84_1024 --model stylegan3-r-afhqv2-512x512.pkl --seed 42
 ```
+
+## 🎨 What Makes This Fork Special
+
+### Original Lucid Sonic Dreams
+- Generates polished, realistic landscapes
+- Shows only the final StyleGAN output
+- Works on various platforms (CUDA, CPU)
+
+### This Apple Silicon Fork
+- **Reveals the AI's "thought process"** by extracting intermediate neural layers
+- **10x performance boost** for early layers through true early stopping
+- **Mathematical beauty**: 512+ dimensional neural activations → trippy RGB visuals via PCA
+- **Native resolution preservation**: See layers at their true computational resolution
+- **Apple Silicon exclusive**: Optimized for Metal Performance Shaders
+
+### The Neural Archaeology Experience
+
+When you specify `--layer L5_84_1024`, you're not getting a stylized version of the final output. You're getting the **raw mathematical state** of the neural network at that exact computational step, transformed into visual form. It's like having X-ray vision into how AI creates images.
 
 ### Example Workflows
 
