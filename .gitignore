@@ -11,3 +11,4 @@ gen.py
 *.tiff
 song.wav
 stylegan3/
+*.png

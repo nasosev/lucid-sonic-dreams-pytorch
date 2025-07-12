@@ -6,12 +6,13 @@ from PIL import ImageEnhance
 
 
 def contrast_effect(array, strength: float, amplitude: float):
-    """Sample effect: increase image contrast"""
-
+    """Sample effect: increase image contrast using faster numpy operations"""
+    
     contrast_factor = 1 + amplitude * strength
-    img = PIL.Image.fromarray(array)
-    contrasted_image = PIL.ImageEnhance.Contrast(img).enhance(contrast_factor)
-    return np.array(contrasted_image)
+    # Use numpy for faster contrast adjustment instead of PIL
+    mean = np.mean(array)
+    contrasted = (array - mean) * contrast_factor + mean
+    return np.clip(contrasted, 0, 255).astype(np.uint8)
 
 
 def flash_effect(array, strength: float, amplitude: float):

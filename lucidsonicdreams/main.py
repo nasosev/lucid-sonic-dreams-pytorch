@@ -9,19 +9,14 @@ import random
 from scipy.stats import truncnorm
 import torch
 from PIL import Image
-import skimage.exposure
 import librosa
 import soundfile
 import moviepy.editor as mpy
-from moviepy.audio.AudioClip import AudioArrayClip
 import pygit2
 from importlib import import_module
 
 from .helper_functions import *
 from .sample_effects import *
-import logging
-
-import cv2
 
 import concurrent.futures
 
@@ -118,7 +113,7 @@ class LucidSonicDream:
         self.latent_center = latent_center
         self.latent_radius = latent_radius
         self.seed = seed
-        
+
         # Initialize optimized audio processor
         self._audio_processor = OptimizedAudioProcessor()
 
@@ -216,9 +211,9 @@ class LucidSonicDream:
 
     def load_specs(self):
         """Load normalized spectrograms and chromagram using optimized audio processing"""
-        
+
         logging.info("Loading and processing audio with optimized pipeline...")
-        
+
         # Use optimized audio processor
         audio_result = self._audio_processor.load_and_process_audio(
             primary_audio=self.song,
@@ -234,20 +229,20 @@ class LucidSonicDream:
             motion_percussive=self.motion_percussive,
             motion_harmonic=self.motion_harmonic
         )
-        
+
         # Extract results from optimized processor
         spectrograms = audio_result['spectrograms']
         self.spec_norm_pulse = spectrograms['spec_norm_pulse']
         self.spec_norm_motion = spectrograms['spec_norm_motion']
         self.spec_norm_class = spectrograms['spec_norm_class']
-        
+
         self.chrom_class = audio_result['chrom_class']
         self.pitches_sorted = audio_result['pitches_sorted']
         self.frame_duration = audio_result['frame_duration']
-        
+
         # Keep primary audio for duration calculations
         self.wav, self.sr = audio_result['primary_audio']
-        
+
         logging.info("Audio processing completed successfully")
 
     def transform_classes(self):
@@ -347,7 +342,7 @@ class LucidSonicDream:
 
         # If class_shuffle_seconds is an integer, return True if current timestamp
         # (in seconds) is divisible by this integer
-        if type(class_shuffle_seconds) == int:
+        if isinstance(class_shuffle_seconds, int):
             if frame != 0 and frame % round(class_shuffle_seconds * fps) == 0:
                 return True
             else:
@@ -355,7 +350,7 @@ class LucidSonicDream:
 
         # If class_shuffle_seconds is a list, return True if current timestamp
         # (in seconds) is in list
-        if type(class_shuffle_seconds) == list:
+        if isinstance(class_shuffle_seconds, list):
             if frame / fps + self.start in class_shuffle_seconds:
                 return True
             else:
@@ -377,7 +372,7 @@ class LucidSonicDream:
         if self.seed is not None:
             np.random.seed(self.seed)
             random.seed(self.seed)
-        
+
         # Determine number of distinct noise vectors based on speed_fpm and audio duration
         duration_seconds = librosa.get_duration(y=self.wav, sr=self.sr)
         num_init_noise = round(duration_seconds / 60 * self.speed_fpm)
@@ -657,69 +652,54 @@ class LucidSonicDream:
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
         dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4
+            ds, batch_size=batch_size, pin_memory=False, shuffle=False, num_workers=0
         )
 
         # executor = concurrent.futures.ProcessPoolExecutor()
-
-        self.final_images = []
-        self.file_names = []
-        # Generate frames
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            for i, (noise_batch, class_batch) in enumerate(
-                tqdm(dl, position=0, desc="Generating frames")
-            ):
-                # If style is a custom function, pass batches to the function
-                if callable(self.style):
-                    image_batch = self.style(
-                        noise_batch=noise_batch, class_batch=class_batch
+        # Generate frames - remove unnecessary ThreadPoolExecutor wrapper
+        for i, (noise_batch, class_batch) in enumerate(
+            tqdm(dl, position=0, desc="Generating frames")
+        ):
+            # If style is a custom function, pass batches to the function
+            if callable(self.style):
+                image_batch = self.style(
+                    noise_batch=noise_batch, class_batch=class_batch
+                )
+            # Otherwise, generate frames with StyleGAN
+            else:
+                if self.use_tf:
+                    noise_batch = noise_batch.numpy()
+                    class_batch = class_batch.numpy()
+                    w_batch = self.Gs.components.mapping.run(
+                        noise_batch, np.tile(class_batch, (batch_size, 1))
                     )
-                # Otherwise, generate frames with StyleGAN
+                    image_batch = self.Gs.components.synthesis.run(
+                        w_batch, **Gs_syn_kwargs
+                    )
+                    image_batch = np.array(image_batch)
                 else:
-                    if self.use_tf:
-                        noise_batch = noise_batch.numpy()
-                        class_batch = class_batch.numpy()
-                        w_batch = self.Gs.components.mapping.run(
-                            noise_batch, np.tile(class_batch, (batch_size, 1))
+                    # Direct conversion to MPS device without redundant operations
+                    noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
+                    class_tensor = class_batch.to(device=device, dtype=torch.float32)
+
+                    with torch.no_grad():
+                        w_batch = self.Gs.mapping(
+                            noise_tensor,
+                            class_tensor,
+                            truncation_psi=self.truncation_psi,
                         )
-                        image_batch = self.Gs.components.synthesis.run(
-                            w_batch, **Gs_syn_kwargs
-                        )
-                        image_batch = np.array(image_batch)
-                    else:
-                        noise_batch = noise_batch.to(device=device, dtype=torch.float32)
-                        # Convert once using torch.tensor, ensuring the target device is specified
-                        noise_tensor = torch.tensor(
-                            noise_batch, device=device, dtype=torch.float32
-                        )
-                        class_tensor = torch.tensor(
-                            class_batch, device=device, dtype=torch.float32
-                        )
-                        with torch.no_grad():
-                            w_batch = self.Gs.mapping(
-                                noise_tensor,
-                                class_tensor,
-                                truncation_psi=self.truncation_psi,
-                            )
-                            image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
-                        image_ready = (
-                            (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
-                            .clamp(0, 255)
-                            .to(torch.uint8)
-                            .squeeze(0)
-                            .cpu()
-                            .numpy()
-                        )
-                        if batch_size == 1:
-                            image_ready = np.expand_dims(image_ready, axis=0)
-                        future_to_url = {
-                            executor.submit(
-                                self.images_saver,
-                                image_ready,
-                                batch_size * i,
-                                resolution,
-                            )
-                        }
+                        image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+
+                    # Keep batch dimension for efficient processing
+                    image_ready = (
+                        (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
+                        .clamp(0, 255)
+                        .to(torch.uint8)
+                        .cpu()
+                        .numpy()
+                    )
+                    # Direct call instead of unnecessary executor submit
+                    self.images_saver(image_ready, batch_size * i, resolution)
 
     def generate_frames(self):
         """Generate GAN output for each frame of video."""
@@ -753,18 +733,18 @@ class LucidSonicDream:
         ds = MultiTensorDataset(
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
-        
+
         # Determine optimal worker count for data loading
         optimal_workers = get_optimal_worker_count()
-        
+
         # Disable pin_memory for MPS as it's not supported on Apple Silicon
         use_pin_memory = False
-        
+
         dl = torch.utils.data.DataLoader(
-            ds, 
-            batch_size=batch_size, 
-            pin_memory=use_pin_memory, 
-            shuffle=False, 
+            ds,
+            batch_size=batch_size,
+            pin_memory=use_pin_memory,
+            shuffle=False,
             num_workers=optimal_workers
         )
 
@@ -816,7 +796,7 @@ class LucidSonicDream:
                             .cpu()
                             .numpy()
                         )
-                        
+
                         # Clear MPS cache to free memory after inference
                         torch.mps.empty_cache()
 
@@ -834,21 +814,38 @@ class LucidSonicDream:
             concurrent.futures.wait(futures)
 
     def images_saver(self, image, current_counter: int, resolution):
-        file_names = []
-        final_images = []
+        # Process each image with correct audio-reactive effects
+        tasks = []
         for j, array in enumerate(image):
-            file_names.append(str(current_counter + j).zfill(len(str(len(self.noise)))))
+            file_name = str(current_counter + j).zfill(len(str(len(self.noise))))
+            # Apply audio-reactive effects per frame
             for effect in self.custom_effects:
                 array = effect.apply_effect(array=array, index=current_counter + j)
-            final_images.append(array)
-        for file_name, final_image in zip(
-            file_names, final_images
-        ):  # tqdm(zip(file_names, final_images), position=1, leave=False, desc="Storing frames", total=len(file_names)):
-            with Image.fromarray(final_image, mode="RGB") as final_image_PIL:
-                # If resolution is provided, resize
-                if resolution:
+            tasks.append((file_name, array))
+
+        # Optimized file I/O operations
+        def save_single_image(args):
+            file_name, final_image = args
+            # Use PNG instead of TIFF for faster I/O
+            if resolution and final_image.shape[0] != resolution:
+                # Use cv2 for faster resizing if available, fallback to PIL
+                try:
+                    import cv2
+                    final_image = cv2.resize(final_image, (resolution, resolution))
+                except ImportError:
+                    final_image_PIL = Image.fromarray(final_image, mode="RGB")
                     final_image_PIL = final_image_PIL.resize((resolution, resolution))
-                final_image_PIL.save(os.path.join(self.frames_dir, file_name + ".tiff"))
+                    final_image = np.array(final_image_PIL)
+
+            # Save as PNG for better compression and speed
+            Image.fromarray(final_image, mode="RGB").save(
+                os.path.join(self.frames_dir, file_name + ".png"),
+                optimize=True
+            )
+
+        # Process file saves in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            executor.map(save_single_image, tasks)
 
     def hallucinate(
         self,
@@ -914,7 +911,7 @@ class LucidSonicDream:
 
         self.file_name = file_name if file_name[-4:] == ".mp4" else file_name + ".mp4"
         self.resolution = resolution
-        
+
         # Determine optimal batch size if not provided
         if batch_size is None:
             self.batch_size = get_optimal_batch_size(
@@ -948,7 +945,7 @@ class LucidSonicDream:
 
         # Configure logging to show optimization info
         logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-        
+
         # Initialize style
         if not self.style_exists:
             print("Preparing style...")
@@ -1063,3 +1060,4 @@ class EffectsGenerator:
 
         amplitude = self.spec[index]
         return self.func(array=array, strength=self.strength, amplitude=amplitude)
+

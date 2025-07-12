@@ -153,7 +153,7 @@ if __name__ == "__main__":
     # Build hallucinate parameters
     hallucinate_params = {
         "file_name": "song.mp4",
-        "fps": 12,
+        "fps": 24,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
         "pulse_react": 0.25,  # Gentler pulse reactions (default is 0.5)
         "motion_react": 0.25,  # Gentler motion reactions (default is 0.5)
@@ -162,7 +162,7 @@ if __name__ == "__main__":
         "class_pitch_react": 0.25,  # Gentler class reactions (default is 0.5)
         "contrast_strength": 0.25,
         "flash_strength": 0.25,
-        "batch_size": 1,
+        "batch_size": 8,
         "save_frames": True,
     }
 
