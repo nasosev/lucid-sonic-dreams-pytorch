@@ -19,6 +19,7 @@ from importlib import import_module
 
 from .helper_functions import *
 from .sample_effects import *
+import logging
 
 import cv2
 
@@ -82,6 +83,7 @@ class LucidSonicDream:
         num_possible_classes: int = None,
         latent_center: np.ndarray = None,  # New optional parameter
         latent_radius: float = None,  # New optional parameter
+        seed: int = None,  # New optional parameter for reproducibility
     ):
         # If style is a function, raise exception if function does not take
         # noise_batch or class_batch parameters
@@ -115,6 +117,10 @@ class LucidSonicDream:
         # Add new latent space exploration parameters
         self.latent_center = latent_center
         self.latent_radius = latent_radius
+        self.seed = seed
+        
+        # Initialize optimized audio processor
+        self._audio_processor = OptimizedAudioProcessor()
 
         # some stylegan models cannot be converted to pytorch (wikiart)
         self.use_tf = style in ("wikiart",)
@@ -191,7 +197,8 @@ class LucidSonicDream:
                 self.Gs = pickle.load(f)[2]
         else:
             print(f"Loading networks from {weights_file}...")
-            device = torch.device("mps" if torch.mps.is_available() else "cpu")
+            # Apple Silicon MPS device
+            device = torch.device("mps")
             with self.dnnlib.util.open_url(weights_file) as f:
                 self.Gs = self.legacy.load_network_pkl(f)["G_ema"].to(device)  # type: ignore
 
@@ -208,79 +215,40 @@ class LucidSonicDream:
             self.num_possible_classes = 0
 
     def load_specs(self):
-        """Load normalized spectrograms and chromagram"""
-
-        start = self.start
-        duration = self.duration
-        fps = self.fps
-        input_shape = self.input_shape
-        pulse_percussive = self.pulse_percussive
-        pulse_harmonic = self.pulse_harmonic
-        motion_percussive = self.motion_percussive
-        motion_harmonic = self.motion_harmonic
-
-        # Load audio signal data
-        wav, sr = librosa.load(self.song, offset=start, duration=duration)
-        wav_motion = wav_pulse = wav_class = wav
-        sr_motion = sr_pulse = sr_class = sr
-
-        # If pulse_percussive != pulse_harmonic
-        # or motion_percussive != motion_harmonic,
-        # decompose harmonic and percussive signals and assign accordingly
-        aud_unassigned = (not self.pulse_audio) or (not self.motion_audio)
-        pulse_bools_equal = pulse_percussive == pulse_harmonic
-        motion_bools_equal = motion_percussive == motion_harmonic
-
-        if aud_unassigned and not all([pulse_bools_equal, motion_bools_equal]):
-            wav_harm, wav_perc = librosa.effects.hpss(wav)
-            wav_list = [wav, wav_harm, wav_perc]
-
-            pulse_bools = [pulse_bools_equal, pulse_harmonic, pulse_percussive]
-            wav_pulse = wav_list[pulse_bools.index(max(pulse_bools))]
-
-            motion_bools = [motion_bools_equal, motion_harmonic, motion_percussive]
-            wav_motion = wav_list[motion_bools.index(max(motion_bools))]
-
-        # Load audio signal data for Pulse, Motion, and Class if provided
-        if self.pulse_audio:
-            wav_pulse, sr_pulse = librosa.load(
-                self.pulse_audio, offset=start, duration=duration
-            )
-        if self.motion_audio:
-            wav_motion, sr_motion = librosa.load(
-                self.motion_audio, offset=start, duration=duration
-            )
-        if self.class_audio:
-            wav_class, sr_class = librosa.load(
-                self.class_audio, offset=start, duration=duration
-            )
-
-        # Calculate frame duration (i.e. samples per frame)
-        frame_duration = int(sr / fps - (sr / fps % 64))
-
-        # Generate normalized spectrograms for Pulse, Motion and Class
-        self.spec_norm_pulse = get_spec_norm(
-            wav_pulse, sr_pulse, input_shape, frame_duration
+        """Load normalized spectrograms and chromagram using optimized audio processing"""
+        
+        logging.info("Loading and processing audio with optimized pipeline...")
+        
+        # Use optimized audio processor
+        audio_result = self._audio_processor.load_and_process_audio(
+            primary_audio=self.song,
+            pulse_audio=self.pulse_audio,
+            motion_audio=self.motion_audio,
+            class_audio=self.class_audio,
+            start=self.start,
+            duration=self.duration,
+            fps=self.fps,
+            input_shape=self.input_shape,
+            pulse_percussive=self.pulse_percussive,
+            pulse_harmonic=self.pulse_harmonic,
+            motion_percussive=self.motion_percussive,
+            motion_harmonic=self.motion_harmonic
         )
-        self.spec_norm_motion = get_spec_norm(
-            wav_motion, sr_motion, input_shape, frame_duration
-        )
-        self.spec_norm_class = get_spec_norm(
-            wav_class, sr_class, input_shape, frame_duration
-        )
-
-        # Generate chromagram from Class audio
-        chrom_class = librosa.feature.chroma_cqt(
-            y=wav_class, sr=sr, hop_length=frame_duration
-        )
-        # Sort pitches based on "dominance"
-        chrom_class_norm = chrom_class / chrom_class.sum(axis=0, keepdims=1)
-        chrom_class_sum = np.sum(chrom_class_norm, axis=1)
-        pitches_sorted = np.argsort(chrom_class_sum)[::-1]
-
-        # Assign attributes to be used for vector generation
-        self.wav, self.sr, self.frame_duration = wav, sr, frame_duration
-        self.chrom_class, self.pitches_sorted = chrom_class, pitches_sorted
+        
+        # Extract results from optimized processor
+        spectrograms = audio_result['spectrograms']
+        self.spec_norm_pulse = spectrograms['spec_norm_pulse']
+        self.spec_norm_motion = spectrograms['spec_norm_motion']
+        self.spec_norm_class = spectrograms['spec_norm_class']
+        
+        self.chrom_class = audio_result['chrom_class']
+        self.pitches_sorted = audio_result['pitches_sorted']
+        self.frame_duration = audio_result['frame_duration']
+        
+        # Keep primary audio for duration calculations
+        self.wav, self.sr = audio_result['primary_audio']
+        
+        logging.info("Audio processing completed successfully")
 
     def transform_classes(self):
         """Transform/assign value of classes"""
@@ -338,7 +306,7 @@ class LucidSonicDream:
         # For the first class vector, simple use values from
         # the first point in time where at least one pitch > 0
         # (controls for silence at the start of a track)
-        if len(class_vecs) == 0:
+        if frame == 0:
 
             first_chrom = chrom_class[:, np.min(np.where(chrom_class.sum(axis=0) > 0))]
             update_dict = dict(zip(classes, first_chrom))
@@ -405,6 +373,11 @@ class LucidSonicDream:
         class_shuffle_strength = round(self.class_shuffle_strength * 12)
         motion_react = self.motion_react * 20 / fps
 
+        # Set random seed for reproducibility if provided
+        if self.seed is not None:
+            np.random.seed(self.seed)
+            random.seed(self.seed)
+        
         # Determine number of distinct noise vectors based on speed_fpm and audio duration
         duration_seconds = librosa.get_duration(y=self.wav, sr=self.sr)
         num_init_noise = round(duration_seconds / 60 * self.speed_fpm)
@@ -470,14 +443,14 @@ class LucidSonicDream:
                 steps = int(np.floor(num_frames / len(init_noise)) - 1)
                 noise = full_frame_interpolation(init_noise, steps, num_frames)
 
-        # Initialize lists for incremental updates and class vectors
-        pulse_noise = []
-        motion_noise = []
-        self.class_vecs = []
+        # Pre-allocate arrays for incremental updates and class vectors
+        pulse_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
+        motion_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
+        self.class_vecs = np.zeros((num_frames, self.num_possible_classes), dtype=np.float32)
 
         # Base vectors for Pulse and Motion updates
-        pulse_base = np.array([self.pulse_react] * self.input_shape)
-        motion_base = np.array([motion_react] * self.input_shape)
+        pulse_base = np.full(self.input_shape, self.pulse_react, dtype=np.float32)
+        motion_base = np.full(self.input_shape, motion_react, dtype=np.float32)
 
         # Initialize update directions and randomness factors
         self.motion_signs = np.array(
@@ -515,8 +488,8 @@ class LucidSonicDream:
                     i - 1
                 ] * MOTION_SMOOTH + motion_noise_add * (1 - MOTION_SMOOTH)
 
-            pulse_noise.append(pulse_noise_add)
-            motion_noise.append(motion_noise_add)
+            pulse_noise[i] = pulse_noise_add
+            motion_noise[i] = motion_noise_add
 
             # Accumulate motion noise and update the base noise vector
             cumulative_motion += motion_noise_add
@@ -539,7 +512,7 @@ class LucidSonicDream:
 
             # Generate and store the class update vector for this frame
             class_vec_add = self.generate_class_vec(frame=i)
-            self.class_vecs.append(class_vec_add)
+            self.class_vecs[i] = class_vec_add
 
         # Smooth class vectors by averaging over frames and interpolating
         if class_smooth_frames > 1:
@@ -547,13 +520,14 @@ class LucidSonicDream:
                 np.mean(self.class_vecs[i : i + class_smooth_frames], axis=0)
                 for i in range(0, len(self.class_vecs), class_smooth_frames)
             ]
-            self.class_vecs = full_frame_interpolation(
+            smoothed_class_vecs = full_frame_interpolation(
                 class_frames_interp, class_smooth_frames, len(self.class_vecs)
             )
+            self.class_vecs = np.array(smoothed_class_vecs)
 
-        # Convert lists to numpy arrays for downstream processing
+        # Convert noise list to numpy array for downstream processing
         self.noise = np.array(self.noise)
-        self.class_vecs = np.array(self.class_vecs)
+        # self.class_vecs is already a numpy array from pre-allocation
 
     def setup_effects(self):
         """Initializes effects to be applied to each frame"""
@@ -675,7 +649,8 @@ class LucidSonicDream:
         os.makedirs(self.frames_dir)
 
         # create dataloader
-        device = torch.device("mps" if torch.mps.is_available() else "cpu")
+        # Apple Silicon MPS device
+        device = torch.device("mps")
 
         print("Using device:", device)
         ds = MultiTensorDataset(
@@ -772,13 +747,25 @@ class LucidSonicDream:
         os.makedirs(self.frames_dir)
 
         # Create dataloader from noise and class vectors
-        device = torch.device("mps" if torch.mps.is_available() else "cpu")
+        # Apple Silicon MPS device
+        device = torch.device("mps")
         print("Using device:", device)
         ds = MultiTensorDataset(
             [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
         )
+        
+        # Determine optimal worker count for data loading
+        optimal_workers = get_optimal_worker_count()
+        
+        # Disable pin_memory for MPS as it's not supported on Apple Silicon
+        use_pin_memory = False
+        
         dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, pin_memory=True, shuffle=False, num_workers=4
+            ds, 
+            batch_size=batch_size, 
+            pin_memory=use_pin_memory, 
+            shuffle=False, 
+            num_workers=optimal_workers
         )
 
         self.final_images = []
@@ -811,13 +798,9 @@ class LucidSonicDream:
                         image_batch = np.array(image_batch)
                     else:
                         # For PyTorch: move to device and run synthesis with no_grad
-                        # Convert once using torch.tensor, ensuring the target device is specified
-                        noise_tensor = torch.tensor(
-                            noise_batch, device=device, dtype=torch.float32
-                        )
-                        class_tensor = torch.tensor(
-                            class_batch, device=device, dtype=torch.float32
-                        )
+                        # Use .to() for existing tensors instead of torch.tensor()
+                        noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
+                        class_tensor = class_batch.to(device=device, dtype=torch.float32)
                         with torch.no_grad():
                             w_batch = self.Gs.mapping(
                                 noise_tensor,
@@ -833,6 +816,9 @@ class LucidSonicDream:
                             .cpu()
                             .numpy()
                         )
+                        
+                        # Clear MPS cache to free memory after inference
+                        torch.mps.empty_cache()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
                 if batch_size == 1 and image_batch.ndim == 3:
@@ -873,7 +859,7 @@ class LucidSonicDream:
         start: float = 0,
         duration: float = None,
         save_frames: bool = False,
-        batch_size: int = 1,
+        batch_size: int = None,
         speed_fpm: int = 12,
         pulse_percussive: bool = True,
         pulse_harmonic: bool = False,
@@ -928,7 +914,18 @@ class LucidSonicDream:
 
         self.file_name = file_name if file_name[-4:] == ".mp4" else file_name + ".mp4"
         self.resolution = resolution
-        self.batch_size = batch_size
+        
+        # Determine optimal batch size if not provided
+        if batch_size is None:
+            self.batch_size = get_optimal_batch_size(
+                model_input_shape=self.input_shape,
+                target_memory_usage=0.8,  # 80% memory usage as requested
+                max_batch_size=8  # Reasonable maximum for M4 16GB
+            )
+            logging.info(f"Auto-selected batch size: {self.batch_size}")
+        else:
+            self.batch_size = batch_size
+            logging.info(f"Using provided batch size: {self.batch_size}")
         self.speed_fpm = speed_fpm
         self.pulse_react = pulse_react
         self.motion_react = motion_react
@@ -949,6 +946,9 @@ class LucidSonicDream:
         # stylegan2 params
         self.truncation_psi = truncation_psi
 
+        # Configure logging to show optimization info
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+        
         # Initialize style
         if not self.style_exists:
             print("Preparing style...")

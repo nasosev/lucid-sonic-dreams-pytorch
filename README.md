@@ -1,9 +1,218 @@
-# Notes about this fork
+# Lucid Sonic Dreams - Psychedelic Layer Fork
 
 ## Apple Silicon Metal Performance Shaders support
 
 - This fork makes minimal changes for Apple Silicon MPS support but removes CUDA support.
 - Verified to work on Apple M4 2024, macOS 15.3.1.
+
+## 🧠 Psychedelic Layer Visualization (New!)
+
+This fork introduces the ability to capture and visualize intermediate layers from the StyleGAN3 neural network, revealing the AI's internal "thought process" as it generates images. Instead of seeing only the final polished output, you can explore the abstract patterns, geometric forms, and surreal artifacts that exist within the network's hidden layers.
+
+## Usage
+
+```bash
+python dream.py <audio_file> [layer] [model] [options]
+```
+
+### Arguments
+
+- `audio_file`: Input audio file (required)
+- `layer`: StyleGAN layer to extract (optional, e.g., L12_276_128)
+- `model`: StyleGAN model file (optional, e.g., stylegan3-r-afhqv2-512x512.pkl)
+
+### Options
+
+- `--latent`: Use latent vector constraints for exploration
+- `--seed <number>`: Random seed for reproducible generation
+
+### Basic Usage
+
+```bash
+# Normal generation (final layer)
+python dream.py sample.mp3
+
+# Psychedelic generation (intermediate layer)
+python dream.py sample.mp3 L2_36_512
+
+# Use specific model
+python dream.py sample.mp3 L8_148_512 stylegan3-r-afhqv2-512x512.pkl
+
+# With latent constraints and seed
+python dream.py sample.mp3 L5_84_1024 --latent --seed 42
+```
+
+### Example Workflows
+
+## Layer Exploration Guide
+
+### Finding Available Layers
+
+```bash
+python explore_layers.py <model_file>
+python explore_layers.py stylegan3-r-afhqv2-512x512.pkl
+```
+
+This will show all available layers like:
+
+```
+L0_36_1024    # Early: Pure abstract patterns
+L5_84_1024    # Mid: Emerging structures
+L10_532_287   # Late: Detailed features
+L14_512_3     # Final: Clean output
+```
+
+### Layer Types
+
+**Early Layers (L0-L5)**: Mathematical abstractions, flowing forms, pure color
+**Mid Layers (L6-L10)**: Emerging structures, surreal landscapes, complex patterns
+**Late Layers (L11-L14)**: Refined details, subtle artifacts, near-final quality
+
+## Performance Features
+
+### True Early Stopping
+
+When using layer extraction, the system only computes up to the target layer, providing massive speed improvements:
+
+- **L0-L5**: ~10x faster (skip most expensive layers)
+- **L6-L10**: ~5x faster (skip high-resolution processing)
+- **L11-L14**: Normal speed
+
+### Native Resolution Preservation
+
+Each layer maintains its natural resolution without forced rescaling:
+
+- L10_532_287 outputs at 532×532 pixels
+- L8_276_645 outputs at 276×276 pixels
+- Use `vibify.py` for post-processing rescaling if needed
+
+### Adaptive Batch Processing
+
+Automatically adjusts batch size based on model resolution to prevent memory errors:
+
+- 512×512 models: batch_size=2
+- 256×256 models: batch_size=4
+- Lower resolution: batch_size=8
+
+## Example Workflows
+
+#### 1. Pure Abstract Art (Early Layers)
+
+```bash
+# Mathematical flowing forms
+python dream.py mystical_ambient.mp3 L0_36_1024
+
+# Geometric color blobs
+python dream.py electronic_beat.mp3 L2_52_1024
+
+# Primitive shape formation
+python dream.py jazz_improv.mp3 L4_84_1024
+```
+
+#### 2. Surreal Landscapes (Mid Layers)
+
+```bash
+# Dream-like natural scenes
+python dream.py atmospheric_music.mp3 L8_276_645
+
+# Complex surreal environments
+python dream.py psychedelic_rock.mp3 L9_276_431
+
+# Detailed but distorted landscapes
+python dream.py ambient_drone.mp3 L10_532_287
+```
+
+#### 3. Subtle Psychedelia (Late Layers)
+
+```bash
+# Nearly normal with AI artifacts
+python dream.py classical_piece.mp3 L13_512_128
+
+# Recommended: Best balance of detail and psychedelia
+python dream.py any_music.mp3 L14_512_3
+```
+
+## Post-Processing
+
+Use `vibify.py` to add CRT-style effects to any generated video:
+
+```bash
+python vibify.py song.mp4
+```
+
+This applies upscaling, chromatic aberration, scanlines, and other retro effects.
+
+```
+
+#### 4. Visualization Comparison
+```bash
+# Create 4 different visualization methods for any layer
+python better_visualization.py L8_148_512
+python better_visualization.py L2_36_512
+python better_visualization.py L14_256_3
+```
+
+### Programming Interface
+
+```python
+from lucidsonicdreams import LucidSonicDream
+
+# Load the layer capture functionality
+exec(open('direct_patch.py').read())
+
+# Create instance
+L = LucidSonicDream(song="music.mp3", style="models/lhq-256-stylegan3-t-25Mimg.pkl")
+
+# Generate with layer capture
+L.hallucinate(
+    file_name="psychedelic_output.mp4",
+    resolution=256,
+    fps=24,
+    capture_layer="L8_148_512"  # Specify any layer
+)
+```
+
+### Complete Layer Catalog
+
+The StyleGAN3 network contains 15 main layers (L0-L14), each producing different levels of abstraction:
+
+#### Early Layers (Abstract Geometric Patterns)
+
+- **L0_36_512** - First layer: Pure mathematical abstractions, flowing geometric forms
+- **L1_36_512** - Basic pattern formation, color gradients
+- **L2_36_512** - Blob-like forms, primary color relationships
+- **L3_52_512** - Early shape recognition, basic textures
+- **L4_52_512** - Primitive landscape elements, horizon hints
+
+#### Mid Layers (Recognizable but Surreal)
+
+- **L5_84_512** - Abstract landscapes with geological patterns
+- **L6_84_512** - Natural forms emerge: rocks, clouds, water
+- **L7_148_512** - More detailed terrain, atmospheric effects
+- **L8_148_512** - Recognizable landscapes with dream-like distortions
+- **L9_148_362** - Complex natural scenes with surreal elements
+
+#### Late Layers (Detailed but Psychedelic)
+
+- **L10_276_256** - Highly detailed landscapes with neural artifacts
+- **L11_276_181** - Near-photorealistic with AI "hallucinations"
+- **L12_276_128** - Complex scenes with subtle distortions
+- **L13_256_128** - Almost final quality with minor neural effects
+- **L14_256_3** - **Penultimate layer**: Final landscapes with subtle AI artifacts (recommended for psychedelic effects)
+
+### Recommended Layers for Different Effects
+
+- **Pure Abstraction**: L0, L1, L2 - Mathematical forms and color flows
+- **Geometric Psychedelia**: L3, L4, L5 - Shape formation and primitive landscapes
+- **Surreal Landscapes**: L8, L9, L10 - Recognizable but dream-like scenes
+- **Subtle Psychedelia**: L13, L14 - Nearly normal with AI artifacts
+
+### Advanced Visualization Ideas
+
+1. **Layer Morphing**: Blend multiple layers for complex effects
+2. **Temporal Layer Switching**: Change layers based on audio intensity
+3. **Multi-layer Compositing**: Overlay different abstraction levels
+4. **Layer-specific Color Grading**: Apply different effects to different layers
 
 ## Resources
 
@@ -30,8 +239,6 @@ Lucid Sonic Dreams syncs GAN-generated visuals to music. By default, it uses [NV
 Sample output can be found on [YouTube](https://youtu.be/l-nGC-ve7sI) and [Instagram](https://www.instagram.com/lucidsonicdreams/).
 
 ## Installation
-
-This implementation has been teston on Python 3.6 and 3.7. This now uses the PyTorch implementation of StyleGAN2.
 
 To install, simply run:
 

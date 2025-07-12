@@ -4,10 +4,13 @@ import pickle
 import requests
 import json
 import pandas as pd
+import os
+import logging
 
 import librosa
 import pygit2
 import gdown
+import torch
 
 # from mega import Mega
 
@@ -117,7 +120,17 @@ def full_frame_interpolation(frame_init, steps, len_output):
 
 
 def slerp(val, low, high):
-    """Spherical linear interpolation."""
+    """Spherical linear interpolation. Supports both single vectors and batches."""
+    # Handle batch operations
+    if isinstance(val, (list, np.ndarray)) and np.array(val).ndim > 0:
+        # Batch case: val is array of interpolation parameters
+        val = np.array(val)
+        result = np.zeros((len(val),) + low.shape)
+        for i, v in enumerate(val):
+            result[i] = slerp(v, low, high)
+        return result
+
+    # Single interpolation case (original behavior)
     low_norm = low / np.linalg.norm(low)
     high_norm = high / np.linalg.norm(high)
     dot = np.clip(np.dot(low_norm, high_norm), -1.0, 1.0)
@@ -135,9 +148,255 @@ def generate_narrow_perturbation(latent_dim, scale=1e-4):
 
 def constrain_noise(noise, center, max_radius):
     """Project `noise` back into a sphere of radius `max_radius` around `center`."""
-    diff = noise - center
-    norm = np.linalg.norm(diff)
+    # Handle both single vectors and batches of vectors
+    if noise.ndim == 1:
+        # Single vector case (original behavior)
+        diff = noise - center
+        norm = np.linalg.norm(diff)
+        if norm > max_radius:
+            diff = diff / norm * max_radius
+        return center + diff
+    else:
+        # Vectorized batch case
+        diff = noise - center
+        norms = np.linalg.norm(diff, axis=-1, keepdims=True)
+        # Only scale vectors that exceed max_radius
+        scale = np.minimum(1.0, max_radius / np.maximum(norms, 1e-8))
+        return center + diff * scale
 
-    if norm > max_radius:
-        diff = diff / norm * max_radius
-    return center + diff
+
+def get_optimal_batch_size(
+    model_input_shape: int = 512,
+    target_memory_usage: float = 0.8,
+    min_batch_size: int = 1,
+    max_batch_size: int = 16,
+) -> int:
+    """
+    Dynamically determine optimal batch size for Apple Silicon MPS.
+
+    Args:
+        model_input_shape: Input dimension for StyleGAN (typically 512)
+        target_memory_usage: Target memory utilization (0.8 = 80%)
+        min_batch_size: Minimum allowed batch size
+        max_batch_size: Maximum allowed batch size for stability
+
+    Returns:
+        Optimal batch size for Apple Silicon system
+    """
+
+    try:
+        # Try to get system memory using psutil if available
+        try:
+            import psutil
+
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+        except ImportError:
+            # Fallback: estimate based on common Apple Silicon configurations
+            # This is a reasonable approximation for most systems
+            import subprocess
+
+            try:
+                # Use system_profiler to get memory info on macOS
+                result = subprocess.run(
+                    ["system_profiler", "SPHardwareDataType"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if "Memory:" in result.stdout:
+                    # Parse memory from system_profiler output
+                    lines = result.stdout.split("\n")
+                    for line in lines:
+                        if "Memory:" in line:
+                            memory_str = line.split(":")[1].strip()
+                            if "GB" in memory_str:
+                                total_memory_gb = float(memory_str.split()[0])
+                                break
+                    else:
+                        total_memory_gb = 16.0  # Conservative default
+                else:
+                    total_memory_gb = 16.0  # Conservative default
+            except Exception:
+                total_memory_gb = 16.0  # Conservative default
+
+        # Estimate available MPS memory based on system memory
+        # Conservative approach for stability - avoid system crashes
+        estimated_mps_memory_gb = total_memory_gb * 0.7
+
+        # Estimate memory per batch for Apple Silicon:
+        # - StyleGAN inference: ~500MB per batch for 512x512
+        # - Additional overhead: ~200MB
+        memory_per_batch_gb = 0.7
+
+        # Calculate optimal batch size
+        max_batches_by_memory = int(
+            estimated_mps_memory_gb * target_memory_usage / memory_per_batch_gb
+        )
+        optimal_batch_size = min(
+            max(max_batches_by_memory, min_batch_size), max_batch_size
+        )
+
+        logging.info(
+            f"System memory: {total_memory_gb:.1f}GB, "
+            f"estimated MPS memory: {estimated_mps_memory_gb:.1f}GB, "
+            f"optimal batch size: {optimal_batch_size}"
+        )
+
+        return optimal_batch_size
+
+    except Exception as e:
+        logging.warning(f"Failed to determine optimal batch size: {e}")
+        return min_batch_size
+
+
+def get_optimal_worker_count() -> int:
+    """
+    Determine optimal number of workers for data loading and concurrent processing.
+
+    Returns:
+        Optimal worker count based on system capabilities
+    """
+    try:
+        # Get CPU count
+        cpu_count = os.cpu_count() or 1
+
+        # For I/O bound tasks (image saving), use more workers
+        # For CPU bound tasks, use fewer to avoid context switching overhead
+        # Conservative approach: use 75% of available cores, minimum 2, maximum 8
+        optimal_workers = min(max(int(cpu_count * 0.75), 2), 8)
+
+        logging.info(f"System has {cpu_count} CPUs, using {optimal_workers} workers")
+        return optimal_workers
+
+    except Exception as e:
+        logging.warning(f"Failed to determine optimal worker count: {e}")
+        return 4  # Fallback to reasonable default
+
+
+class OptimizedAudioProcessor:
+    """
+    Optimized audio processing class that eliminates redundant loading and FFT operations.
+    Processes all audio channels efficiently with minimal memory overhead.
+    """
+
+    def __init__(self):
+        self._audio_cache = {}
+        self._hpss_cache = {}
+
+    def load_and_process_audio(
+        self,
+        primary_audio: str,
+        pulse_audio: str = None,
+        motion_audio: str = None,
+        class_audio: str = None,
+        start: float = 0,
+        duration: float = None,
+        fps: int = 43,
+        input_shape: int = 512,
+        pulse_percussive: bool = True,
+        pulse_harmonic: bool = False,
+        motion_percussive: bool = False,
+        motion_harmonic: bool = True,
+    ) -> dict:
+        """
+        Load and process all audio files efficiently, eliminating redundant operations.
+
+        Returns:
+            Dictionary containing processed audio data and spectrograms
+        """
+        # Cache key for this specific audio configuration
+        cache_key = f"{primary_audio}_{start}_{duration}_{fps}"
+
+        # Load primary audio file once
+        if cache_key not in self._audio_cache:
+            wav_primary, sr_primary = librosa.load(
+                primary_audio, offset=start, duration=duration
+            )
+            self._audio_cache[cache_key] = (wav_primary, sr_primary)
+        else:
+            wav_primary, sr_primary = self._audio_cache[cache_key]
+
+        # Calculate frame duration once
+        frame_duration = int(sr_primary / fps - (sr_primary / fps % 64))
+
+        # Initialize audio channels
+        audio_channels = {
+            "pulse": {"wav": wav_primary, "sr": sr_primary},
+            "motion": {"wav": wav_primary, "sr": sr_primary},
+            "class": {"wav": wav_primary, "sr": sr_primary},
+        }
+
+        # Load separate audio files if provided (batch load)
+        separate_files = []
+        if pulse_audio and pulse_audio != primary_audio:
+            separate_files.append(("pulse", pulse_audio))
+        if motion_audio and motion_audio != primary_audio:
+            separate_files.append(("motion", motion_audio))
+        if class_audio and class_audio != primary_audio:
+            separate_files.append(("class", class_audio))
+
+        # Batch load separate files
+        for channel, audio_file in separate_files:
+            file_cache_key = f"{audio_file}_{start}_{duration}"
+            if file_cache_key not in self._audio_cache:
+                wav, sr = librosa.load(audio_file, offset=start, duration=duration)
+                self._audio_cache[file_cache_key] = (wav, sr)
+            else:
+                wav, sr = self._audio_cache[file_cache_key]
+            audio_channels[channel] = {"wav": wav, "sr": sr}
+
+        # Perform harmonic/percussive separation only if needed
+        hpss_needed = (not pulse_audio and pulse_percussive != pulse_harmonic) or (
+            not motion_audio and motion_percussive != motion_harmonic
+        )
+
+        if hpss_needed:
+            hpss_cache_key = f"{primary_audio}_{start}_{duration}_hpss"
+            if hpss_cache_key not in self._hpss_cache:
+                logging.info("Performing harmonic/percussive separation...")
+                wav_harm, wav_perc = librosa.effects.hpss(wav_primary)
+                self._hpss_cache[hpss_cache_key] = (wav_harm, wav_perc)
+            else:
+                wav_harm, wav_perc = self._hpss_cache[hpss_cache_key]
+
+            # Assign optimal audio for pulse/motion based on preferences
+            if not pulse_audio:
+                if pulse_percussive and not pulse_harmonic:
+                    audio_channels["pulse"]["wav"] = wav_perc
+                elif pulse_harmonic and not pulse_percussive:
+                    audio_channels["pulse"]["wav"] = wav_harm
+
+            if not motion_audio:
+                if motion_percussive and not motion_harmonic:
+                    audio_channels["motion"]["wav"] = wav_perc
+                elif motion_harmonic and not motion_percussive:
+                    audio_channels["motion"]["wav"] = wav_harm
+
+        # Batch compute spectrograms
+        logging.info("Computing mel spectrograms...")
+        spectrograms = {}
+        for channel, audio_data in audio_channels.items():
+            spectrograms[f"spec_norm_{channel}"] = get_spec_norm(
+                audio_data["wav"], audio_data["sr"], input_shape, frame_duration
+            )
+
+        # Compute chromagram for class audio
+        logging.info("Computing chromagram...")
+        chrom_class = librosa.feature.chroma_cqt(
+            y=audio_channels["class"]["wav"],
+            sr=audio_channels["class"]["sr"],
+            hop_length=frame_duration,
+        )
+
+        # Sort pitches based on dominance
+        chrom_class_norm = chrom_class / chrom_class.sum(axis=0, keepdims=1)
+        chrom_class_sum = np.sum(chrom_class_norm, axis=1)
+        pitches_sorted = np.argsort(chrom_class_sum)[::-1]
+
+        return {
+            "spectrograms": spectrograms,
+            "chrom_class": chrom_class,
+            "pitches_sorted": pitches_sorted,
+            "frame_duration": frame_duration,
+            "primary_audio": (wav_primary, sr_primary),
+        }
