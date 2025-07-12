@@ -1,4 +1,4 @@
-# Notes about this fork
+# Lucid Sonic Dreams - Psychedelic Layer Fork
 
 ## Apple Silicon Metal Performance Shaders support
 
@@ -9,49 +9,131 @@
 
 This fork introduces the ability to capture and visualize intermediate layers from the StyleGAN3 neural network, revealing the AI's internal "thought process" as it generates images. Instead of seeing only the final polished output, you can explore the abstract patterns, geometric forms, and surreal artifacts that exist within the network's hidden layers.
 
+## Usage
+
+```bash
+python dream.py <audio_file> [layer] [model] [options]
+```
+
+### Arguments
+
+- `audio_file`: Input audio file (required)
+- `layer`: StyleGAN layer to extract (optional, e.g., L12_276_128)
+- `model`: StyleGAN model file (optional, e.g., stylegan3-r-afhqv2-512x512.pkl)
+
+### Options
+
+- `--latent`: Use latent vector constraints for exploration
+- `--seed <number>`: Random seed for reproducible generation
+
 ### Basic Usage
 
 ```bash
 # Normal generation (final layer)
-python test.py sample.mp3
+python dream.py sample.mp3
 
 # Psychedelic generation (intermediate layer)
-python test.py sample.mp3 L2_36_512
+python dream.py sample.mp3 L2_36_512
+
+# Use specific model
+python dream.py sample.mp3 L8_148_512 stylegan3-r-afhqv2-512x512.pkl
+
+# With latent constraints and seed
+python dream.py sample.mp3 L5_84_1024 --latent --seed 42
 ```
 
 ### Example Workflows
 
+## Layer Exploration Guide
+
+### Finding Available Layers
+
+```bash
+python explore_layers.py <model_file>
+python explore_layers.py stylegan3-r-afhqv2-512x512.pkl
+```
+
+This will show all available layers like:
+```
+L0_36_1024    # Early: Pure abstract patterns
+L5_84_1024    # Mid: Emerging structures  
+L10_532_287   # Late: Detailed features
+L14_512_3     # Final: Clean output
+```
+
+### Layer Types
+
+**Early Layers (L0-L5)**: Mathematical abstractions, flowing forms, pure color
+**Mid Layers (L6-L10)**: Emerging structures, surreal landscapes, complex patterns  
+**Late Layers (L11-L14)**: Refined details, subtle artifacts, near-final quality
+
+## Performance Features
+
+### True Early Stopping
+When using layer extraction, the system only computes up to the target layer, providing massive speed improvements:
+
+- **L0-L5**: ~10x faster (skip most expensive layers)
+- **L6-L10**: ~5x faster (skip high-resolution processing)
+- **L11-L14**: Normal speed
+
+### Native Resolution Preservation
+Each layer maintains its natural resolution without forced rescaling:
+
+- L10_532_287 outputs at 532×532 pixels
+- L8_276_645 outputs at 276×276 pixels
+- Use `vibify.py` for post-processing rescaling if needed
+
+### Adaptive Batch Processing
+Automatically adjusts batch size based on model resolution to prevent memory errors:
+
+- 512×512 models: batch_size=2
+- 256×256 models: batch_size=4
+- Lower resolution: batch_size=8
+
+## Example Workflows
+
 #### 1. Pure Abstract Art (Early Layers)
 ```bash
 # Mathematical flowing forms
-python test.py mystical_ambient.mp3 L0_36_512
+python dream.py mystical_ambient.mp3 L0_36_1024
 
 # Geometric color blobs  
-python test.py electronic_beat.mp3 L2_36_512
+python dream.py electronic_beat.mp3 L2_52_1024
 
 # Primitive shape formation
-python test.py jazz_improv.mp3 L4_52_512
+python dream.py jazz_improv.mp3 L4_84_1024
 ```
 
 #### 2. Surreal Landscapes (Mid Layers)
 ```bash
 # Dream-like natural scenes
-python test.py atmospheric_music.mp3 L8_148_512
+python dream.py atmospheric_music.mp3 L8_276_645
 
 # Complex surreal environments
-python test.py psychedelic_rock.mp3 L9_148_362
+python dream.py psychedelic_rock.mp3 L9_276_431
 
 # Detailed but distorted landscapes
-python test.py ambient_drone.mp3 L10_276_256
+python dream.py ambient_drone.mp3 L10_532_287
 ```
 
 #### 3. Subtle Psychedelia (Late Layers)
 ```bash
 # Nearly normal with AI artifacts
-python test.py classical_piece.mp3 L13_256_128
+python dream.py classical_piece.mp3 L13_512_128
 
 # Recommended: Best balance of detail and psychedelia
-python test.py any_music.mp3 L14_256_3
+python dream.py any_music.mp3 L14_512_3
+```
+
+## Post-Processing
+
+Use `vibify.py` to add CRT-style effects to any generated video:
+
+```bash
+python vibify.py song.mp4
+```
+
+This applies upscaling, chromatic aberration, scanlines, and other retro effects.
 ```
 
 #### 4. Visualization Comparison

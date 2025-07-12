@@ -17,33 +17,11 @@ os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
 from lucidsonicdreams import LucidSonicDream
 
-def reduce_channels_pca(tensor, target_size=256, n_components=3):
-    """Clean PCA reduction with upscaling - per-batch for maximum visual richness"""
+def reduce_channels_pca(tensor, n_components=3):
+    """Clean PCA reduction - per-batch for maximum visual richness, no rescaling"""
     if tensor.ndim != 4:
-        if tensor.ndim == 2 and tensor.shape[0] == 1:
-            # Affine layer visualization
-            params = tensor[0].cpu().numpy()
-            pattern = np.zeros((target_size, target_size, 3))
-            
-            x = np.linspace(0, 1, target_size)
-            y = np.linspace(0, 1, target_size)
-            xx, yy = np.meshgrid(x, y)
-            
-            n_params = min(len(params), 12)
-            for i in range(min(3, n_params)):
-                if i < n_params:
-                    if i == 0:
-                        pattern[:, :, 0] = np.sin(xx * params[i] * 10) * np.cos(yy * params[i] * 10)
-                    elif i == 1:
-                        pattern[:, :, 1] = np.sin(xx * params[i] * 8 + params[i]) * np.cos(yy * params[i] * 12)
-                    elif i == 2:
-                        pattern[:, :, 2] = np.sin(xx * params[i] * 6) + np.cos(yy * params[i] * 8)
-            
-            pattern = (pattern - pattern.min()) / (pattern.max() - pattern.min() + 1e-8)
-            rgb_tensor = torch.from_numpy(pattern).permute(2, 0, 1).unsqueeze(0).float().to(tensor.device)
-            return rgb_tensor * 2.0 - 1.0
-        
-        return torch.zeros(1, 3, target_size, target_size, device=tensor.device)
+        print(f"❌ Non-4D tensor detected: {tensor.shape} - only 4D feature layers supported")
+        return None
     
     batch, channels, height, width = tensor.shape
     
@@ -89,10 +67,7 @@ def reduce_channels_pca(tensor, target_size=256, n_components=3):
     
     rgb_tensor = rgb_tensor * 2.0 - 1.0
     
-    # Upscale if needed
-    if rgb_tensor.shape[-1] != target_size:
-        rgb_tensor = F.interpolate(rgb_tensor, size=(target_size, target_size), mode='bilinear', align_corners=False)
-        print(f"   ⬆️ Upscaled from {height}x{width} to {target_size}x{target_size}")
+    print(f"   🎯 Native resolution preserved: {height}x{width}")
     
     return rgb_tensor
 
@@ -106,7 +81,7 @@ def get_layer_index(synthesis, target_layer):
     except ValueError:
         return None
 
-def create_early_stopping_forward(original_forward, target_layer, target_size=256):
+def create_early_stopping_forward(original_forward, target_layer):
     """Create early stopping version of synthesis forward pass"""
     
     def early_stopping_forward(ws, **layer_kwargs):
@@ -150,7 +125,10 @@ def create_early_stopping_forward(original_forward, target_layer, target_size=25
         print(f"🎨 Early stopping complete - final shape: {x.shape}")
         
         # Process the captured output
-        processed = reduce_channels_pca(x, target_size=target_size)
+        processed = reduce_channels_pca(x)
+        if processed is None:
+            print(f"❌ Cannot visualize layer {target_layer} - skipping to original output")
+            return original_forward(ws.stack(dim=1), **layer_kwargs)
         return processed
     
     return early_stopping_forward
@@ -177,12 +155,10 @@ def early_stopping_patched_generate_frames(self):
         # Store original synthesis forward
         original_synthesis_forward = self.Gs.synthesis.forward
         
-        # Create early stopping version
-        target_size = getattr(self, 'resolution', 256)
+        # Create early stopping version with native resolution
         early_stopping_forward = create_early_stopping_forward(
             original_synthesis_forward, 
-            target_layer, 
-            target_size
+            target_layer
         )
         
         # Replace synthesis forward method

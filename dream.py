@@ -34,15 +34,20 @@ def save_latent_vector(latent_vector, filename):
 
 
 if __name__ == "__main__":
-    # Get input filename and optional layer from command line arguments
-    if len(sys.argv) > 1:
-        input_audio = sys.argv[1]
-        print(f"Using input audio file: {input_audio}")
-    else:
-        input_audio = "sample.mp3"
-        print(f"No input file specified, using default: {input_audio}")
+    # Parse command line arguments
+    if len(sys.argv) < 2:
+        print("Usage: python dream.py <audio_file> [layer] [model]")
+        print("Examples:")
+        print("  python dream.py sample.mp3")
+        print("  python dream.py sample.mp3 L12_276_128")
+        print("  python dream.py sample.mp3 L10_276_256 stylegan3-r-ffhqu-256x256.pkl")
+        sys.exit(1)
 
-    # Check for layer capture argument
+    # Get audio file
+    input_audio = sys.argv[1]
+    print(f"Using input audio file: {input_audio}")
+
+    # Get layer capture argument (optional)
     capture_layer = None
     if len(sys.argv) > 2:
         capture_layer = sys.argv[2]
@@ -50,20 +55,39 @@ if __name__ == "__main__":
         # Add the true early stopping layer extraction patch
         exec(open("true_early_stopping_patch.py").read())
 
-    # Ask user if they want to use latent vector constraints
-    use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == "y"
+    # Get model file (optional)
+    if len(sys.argv) > 3:
+        model_name = sys.argv[3]
+        filename = f"models/{model_name}"
+        print(f"Using model: {model_name}")
+    else:
+        filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
+        print(f"Using default model: {filename}")
+
+    # Parse additional command line flags
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        add_help=False
+    )  # Don't interfere with positional args
+    parser.add_argument(
+        "--latent", action="store_true", help="Use latent vector constraints"
+    )
+    parser.add_argument(
+        "--seed", type=int, help="Random seed for reproducible generation"
+    )
+
+    # Parse only the flags we care about
+    known_args, _ = parser.parse_known_args()
+    use_latent = known_args.latent
+    if use_latent:
+        print("🎯 Using latent vector constraints for exploration")
 
     latent_center = None
     latent_radius = None
-    seed_value = None
+    seed_value = known_args.seed
 
     if use_latent:
-        # Prompt for a seed value to generate a reproducible latent vector.
-        seed_input = input(
-            "Enter a seed for generating the latent vector (or press Enter for random): "
-        ).strip()
-        seed_value = int(seed_input) if seed_input else None
-
         # Generate and save the latent center
         latent_center = generate_random_latent_center(seed=seed_value)
         latent_radius = 10  # Adjust this value as needed
@@ -74,18 +98,11 @@ if __name__ == "__main__":
         )
         save_latent_vector(latent_center, latent_filename)
         print(f"Latent vector saved to {latent_filename}")
-    else:
-        # Ask for seed even when not using latent constraints for reproducibility
-        seed_input = input(
-            "Enter a seed for reproducible generation (or press Enter for random): "
-        ).strip()
-        seed_value = int(seed_input) if seed_input else None
-        if seed_value is not None:
-            print(f"Using seed: {seed_value}")
 
-    # Specify the style weights file (ensure this path is correct)
-    # Use face model for psychedelic portrait effects
-    filename = "models/lhq-256-stylegan3-t-25Mimg.pkl"
+    if seed_value is not None:
+        print(f"Using seed: {seed_value}")
+
+    # Model file was set above from command line arguments
 
     start_time = time.time()  # Start tracking time
 
@@ -97,10 +114,10 @@ if __name__ == "__main__":
         latent_radius=latent_radius,
         seed=seed_value,
     )
+
     # Build hallucinate parameters
     hallucinate_params = {
         "file_name": "song.mp4",
-        "resolution": 256,
         "fps": 24,
         "speed_fpm": 3,  # Even slower scene changes (default is 12)
         "pulse_react": 0.3,  # Gentler pulse reactions (default is 0.5)
@@ -110,7 +127,7 @@ if __name__ == "__main__":
         "class_pitch_react": 0.3,  # Gentler class reactions (default is 0.5)
         "contrast_strength": 0.5,
         "flash_strength": 0.5,
-        "batch_size": 8,  # Higher batch size for better performance
+        "batch_size": 4,
         "save_frames": True,
     }
 
