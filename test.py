@@ -47,8 +47,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         capture_layer = sys.argv[2]
         print(f"Using layer capture: {capture_layer}")
-        # Add the simple layer extraction patch
-        exec(open("simple_layer_patch.py").read())
+        # Add the true early stopping layer extraction patch
+        exec(open("true_early_stopping_patch.py").read())
 
     # Ask user if they want to use latent vector constraints
     use_latent = input("Use latent vector constraints? (y/n): ").strip().lower() == "y"
