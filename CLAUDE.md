@@ -36,7 +36,7 @@ The fork adds latent space exploration features:
 # Install package in development mode
 pip install -e .
 
-# Install dependencies 
+# Install dependencies
 pip install torch librosa numpy moviepy Pillow tqdm scipy scikit-image pygit2 gdown requests pandas SoundFile
 ```
 
@@ -44,7 +44,7 @@ pip install torch librosa numpy moviepy Pillow tqdm scipy scikit-image pygit2 gd
 
 ```bash
 # Basic usage - generate video from audio
-python test.py
+python dream.py
 
 # Apply post-processing effects to existing video
 python vibify.py input_video.mp4
@@ -68,7 +68,7 @@ The project uses flake8 with E501 (line length) ignored as specified in `setup.c
 - `lucidsonicdreams/main.py`: Core pipeline implementation
 - `lucidsonicdreams/helper_functions.py`: Utility functions and mathematical operations
 - `lucidsonicdreams/sample_effects.py`: Pre-built visual effects (contrast, flash)
-- `test.py`: Example usage with latent space exploration
+- `dream.py`: Example usage with latent space exploration
 - `vibify.py`: Post-processing script for CRT-style effects
 - `models/`: Directory containing StyleGAN model weights
 - `stylegan3/`: Auto-cloned StyleGAN3 repository (NVLabs official)

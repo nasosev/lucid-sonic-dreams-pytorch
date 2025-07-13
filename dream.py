@@ -50,7 +50,7 @@ if __name__ == "__main__":
             "  python dream.py my_song.mp3 --layer L8_276_645 --seed 42  # Full control"
         )
         print()
-        print("Defaults: audio=sample.mp3, model=lhq-256, layer=final, seed=random")
+        print("Defaults: audio=sample.wav, model=lhq-256, layer=final, seed=random")
         print()
         print("Add --help for full options")
         print()
@@ -64,8 +64,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "audio_file",
         nargs="?",
-        default="sample.mp3",
-        help="Input audio file (default: sample.mp3)",
+        default="sample.wav",
+        help="Input audio file (default: sample.wav)",
     )
     parser.add_argument(
         "--layer", help="StyleGAN layer to extract (default: final layer)"
@@ -150,19 +150,21 @@ if __name__ == "__main__":
         seed=seed_value,
     )
 
+    # Generate output filename from input audio file
+    audio_basename = os.path.splitext(os.path.basename(input_audio))[0]
+    output_filename = f"{audio_basename}.mp4"
+
     # Build hallucinate parameters
     hallucinate_params = {
-        "file_name": "song.mp4",
-        "fps": 24,
+        "file_name": output_filename,
+        "fps": 12,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
-        "pulse_react": 0.25,  # Gentler pulse reactions (default is 0.5)
-        "motion_react": 0.25,  # Gentler motion reactions (default is 0.5)
-        "class_smooth_seconds": 2,  # Smoother class transitions (default is 1)
-        "motion_randomness": 0.25,  # Less random motion (default is 0.5)
-        "class_pitch_react": 0.25,  # Gentler class reactions (default is 0.5)
+        "pulse_react": 0.1,  # Gentler pulse reactions (default is 0.5)
+        "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
+        "motion_randomness": 0.1,  # Less random motion (default is 0.5)
         "contrast_strength": 0.25,
         "flash_strength": 0.25,
-        "batch_size": 8,
+        "batch_size": 12,
         "save_frames": True,
     }
 

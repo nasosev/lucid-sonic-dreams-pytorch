@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
 import sys
+import os
 import numpy as np
 import cv2
 from moviepy.editor import VideoFileClip, VideoClip
 
 
-def upscale_frame(frame, factor=2):
+def upscale_frame(frame, factor=2, method="lanczos"):
     """
-    Upscale the input frame by the given factor.
+    Upscale the input frame by the given factor with improved quality.
+
+    Args:
+        frame: Input frame to upscale
+        factor: Upscaling factor (default: 2)
+        method: Interpolation method - 'lanczos', 'cubic', or 'linear' (default: 'lanczos')
     """
     h, w = frame.shape[:2]
-    # Resize the frame using linear interpolation to achieve a smooth upscale.
-    new_frame = cv2.resize(
-        frame, (w * factor, h * factor), interpolation=cv2.INTER_LINEAR
-    )
+
+    # Select interpolation method
+    if method == "lanczos":
+        interpolation = cv2.INTER_LANCZOS4
+    elif method == "cubic":
+        interpolation = cv2.INTER_CUBIC
+    else:
+        interpolation = cv2.INTER_LINEAR
+
+    new_frame = cv2.resize(frame, (w * factor, h * factor), interpolation=interpolation)
     return new_frame
 
 
@@ -40,7 +52,7 @@ def apply_crt_warp(frame, strength=0.0005):
         frame,
         map_x,
         map_y,
-        interpolation=cv2.INTER_LINEAR,
+        interpolation=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_REFLECT,
     )
     return warped
@@ -49,33 +61,42 @@ def apply_crt_warp(frame, strength=0.0005):
 def apply_color_grade(frame):
     """
     Adjust the colors to boost neon-like tones.
+    Expects and returns float32 frame in [0, 1] range.
     """
-    # Normalize the frame values to [0, 1] for float precision.
-    frame_float = frame.astype(np.float32) / 255.0
     # Apply separate scaling factors to each color channel.
-    r = np.clip(frame_float[:, :, 0] * 1.2, 0, 1)
-    g = np.clip(frame_float[:, :, 1] * 1.0, 0, 1)
-    b = np.clip(frame_float[:, :, 2] * 1.3, 0, 1)
+    r = np.clip(frame[:, :, 0] * 1.2, 0, 1)
+    g = np.clip(frame[:, :, 1] * 1.0, 0, 1)
+    b = np.clip(frame[:, :, 2] * 1.3, 0, 1)
     # Reassemble the channels into a single frame.
     new_frame = np.stack([r, g, b], axis=2)
     # Apply a gamma correction for a smoother tonal transition.
     gamma = 1.1
     new_frame = np.power(new_frame, gamma)
-    # Convert back to 8-bit color depth.
-    new_frame = np.clip(new_frame * 255, 0, 255).astype(np.uint8)
     return new_frame
 
 
 def apply_chromatic_aberration(frame, shift=2):
     """
     Slightly shift the red and blue channels to create a chromatic aberration effect.
+    Expects and returns float32 frame in [0, 1] range.
     """
-    # Shift the red channel to the right.
-    red = np.roll(frame[:, :, 0], shift, axis=1)
-    # Shift the blue channel to the left.
-    blue = np.roll(frame[:, :, 2], -shift, axis=1)
-    # The green channel remains unchanged.
+    h, w = frame.shape[:2]
+
+    # Copy original channels
+    red = frame[:, :, 0].copy()
+    blue = frame[:, :, 2].copy()
     green = frame[:, :, 1]
+
+    # Shift red channel to the right, fill edges with edge pixels
+    if shift > 0:
+        red[:, shift:] = frame[:, :-shift, 0]
+        red[:, :shift] = frame[:, 0:1, 0]  # Fill left edge
+
+    # Shift blue channel to the left, fill edges with edge pixels
+    if shift > 0:
+        blue[:, :-shift] = frame[:, shift:, 2]
+        blue[:, -shift:] = frame[:, -1:, 2]  # Fill right edge
+
     # Combine the channels back into one frame.
     aberrated = np.stack((red, green, blue), axis=2)
     return aberrated
@@ -84,51 +105,89 @@ def apply_chromatic_aberration(frame, shift=2):
 def apply_scanlines(frame, intensity=0.1):
     """
     Overlay horizontal scanlines by darkening alternating rows.
-    This version uses vectorized slicing for efficiency.
+    Simple alternating pattern for clear visibility.
+    Expects and returns float32 frame in [0, 1] range.
     """
     h, w = frame.shape[:2]
-    # Create a mask that darkens every other row.
+
+    # Create a simple alternating scanline mask
     mask = np.ones((h, 1), dtype=np.float32)
-    mask[1::2] = 1.0 - intensity  # Darken every other row
+    # Darken every other row (simple alternating pattern)
+    mask[1::2] = 1.0 - intensity
+
     # Repeat the mask across the width of the frame.
     mask = np.repeat(mask, w, axis=1)
     # Stack the mask to match the 3 color channels.
     mask = np.stack([mask] * 3, axis=2)
     # Apply the mask to the frame.
-    scanlined = (frame.astype(np.float32) * mask).astype(np.uint8)
+    scanlined = frame * mask
     return scanlined
 
 
 def add_noise(frame, noise_level=0.03):
     """
-    Add subtle random noise to emulate analog signal imperfections.
+    Add film grain-style noise to emulate analog signal imperfections.
+    Expects and returns float32 frame in [0, 1] range.
     """
-    # Generate Gaussian noise based on the specified noise level.
-    noise = np.random.randn(*frame.shape) * (255 * noise_level)
+    h, w = frame.shape[:2]
+
+    # Generate film grain with proper frequency characteristics
+    # Create multiple noise layers with different frequencies
+    base_noise = np.random.randn(h, w) * noise_level
+    fine_noise = np.random.randn(h, w) * (noise_level * 0.5)
+
+    # Combine noise layers
+    combined_noise = base_noise + fine_noise
+
+    # Apply noise with luminance-dependent intensity
+    # (film grain is more visible in darker areas)
+    luminance = np.mean(frame, axis=2, keepdims=True)
+    noise_intensity = 1.0 - (luminance * 0.3)  # Less noise in bright areas
+
+    # Stack noise across color channels with slight variations
+    noise_r = combined_noise * noise_intensity[:, :, 0]
+    noise_g = combined_noise * noise_intensity[:, :, 0] * 0.9
+    noise_b = combined_noise * noise_intensity[:, :, 0] * 1.1
+
+    noise_3d = np.stack([noise_r, noise_g, noise_b], axis=2)
+
     # Add noise to the frame.
-    noisy = frame.astype(np.float32) + noise
+    noisy = frame + noise_3d
     # Clip the values to ensure they remain valid pixel intensities.
-    noisy = np.clip(noisy, 0, 255).astype(np.uint8)
+    noisy = np.clip(noisy, 0, 1)
     return noisy
 
 
 def process_frame(frame):
     """
     Upscale the frame and chain together all processing steps.
+    Optimized order to minimize artifacts and maintain quality.
     """
-    # Upscale the frame to a higher resolution
-    frame = upscale_frame(frame, factor=2)
-    # Apply CRT warp to mimic a curved CRT display.
-    frame = apply_crt_warp(frame, strength=0.0005)
-    # Adjust the colors for a neon-like appearance.
+    # Convert to float32 [0, 1] range for better precision
+    frame = frame.astype(np.float32) / 255.0
+
+    # Apply color grading early to preserve color relationships
     frame = apply_color_grade(frame)
-    # Apply chromatic aberration to shift color channels.
-    frame = apply_chromatic_aberration(frame, shift=2)
-    # Overlay horizontal scanlines for an analog effect.
+
+    # Upscale the enhanced frame to higher resolution
+    frame = upscale_frame((frame * 255).astype(np.uint8), factor=2)
+    frame = frame.astype(np.float32) / 255.0
+
+    # Apply scanlines last for straight lines (simulates viewing screen)
     frame = apply_scanlines(frame, intensity=0.1)
-    # Add subtle noise to simulate analog imperfections.
+
+    # Apply chromatic aberration (happens in electron gun)
+    frame = apply_chromatic_aberration(frame, shift=4)
+
+    # Apply spatial distortions (curved glass effect) - VERY strong
+    frame = apply_crt_warp((frame * 255).astype(np.uint8), strength=0.01)
+    frame = frame.astype(np.float32) / 255.0
+
+    # Add noise last to simulate final analog imperfections
     frame = add_noise(frame, noise_level=0.03)
-    return frame
+
+    # Convert back to uint8 for output
+    return np.clip(frame * 255, 0, 255).astype(np.uint8)
 
 
 def linear_interpolate_clip(clip):
@@ -171,8 +230,9 @@ def main(input_file):
     # Reapply the original audio BEFORE writing the video
     processed_clip = processed_clip.set_audio(clip.audio)
 
-    # Construct the output file name.
-    output_file = input_file.rsplit(".", 1)[0] + "_vibed.mp4"
+    # Construct the output file name from original basename
+    original_basename = os.path.splitext(os.path.basename(input_file))[0]
+    output_file = f"{original_basename}_vibed.mp4"
 
     # Write the processed video to a new file WITH audio.
     processed_clip.write_videofile(
@@ -181,6 +241,7 @@ def main(input_file):
         audio_codec="aac",
         audio=True,
         fps=processed_clip.fps,  # maintain correct fps
+        ffmpeg_params=["-crf", "18", "-preset", "slow"],  # High quality encoding
     )
 
     # Return the processed clip with audio (optional)
