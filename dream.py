@@ -157,7 +157,7 @@ if __name__ == "__main__":
     # Build hallucinate parameters
     hallucinate_params = {
         "file_name": output_filename,
-        "fps": 12,
+        "fps": 24,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
         "pulse_react": 0.1,  # Gentler pulse reactions (default is 0.5)
         "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
