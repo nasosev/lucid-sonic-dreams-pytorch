@@ -37,7 +37,10 @@ def apply_pca_reordering(tensor, pca_order="rbg"):
     # Reorder channels: tensor is [batch, n_components, height, width]
     return tensor[:, indices, :, :]
 
-def reduce_channels_pca_fast(tensor, n_components=3):
+# Global variable to store fixed PCA components
+_fixed_pca_model = None
+
+def reduce_channels_pca_fast(tensor, n_components=3, use_fixed_pca=False):
     """Fast PCA reduction - optimized for performance"""
     if tensor.ndim != 4:
         return None
@@ -50,10 +53,19 @@ def reduce_channels_pca_fast(tensor, n_components=3):
         reshaped = tensor[b].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
         all_batch_data.append(reshaped)
     
-    # Concatenate all batch data and fit single PCA model for consistency
-    combined_data = np.concatenate(all_batch_data, axis=0)  # [total_pixels, channels]
-    pca = PCA(n_components=n_components)
-    pca.fit(combined_data)
+    # Use fixed PCA model if available and requested
+    global _fixed_pca_model
+    if use_fixed_pca and _fixed_pca_model is not None:
+        pca = _fixed_pca_model
+    else:
+        # Concatenate all batch data and fit single PCA model for consistency
+        combined_data = np.concatenate(all_batch_data, axis=0)  # [total_pixels, channels]
+        pca = PCA(n_components=n_components)
+        pca.fit(combined_data)
+        
+        # Store the PCA model if this is the first time and fixed PCA is requested
+        if use_fixed_pca and _fixed_pca_model is None:
+            _fixed_pca_model = pca
     
     # Apply the same PCA transform to each batch item
     batch_results = []
@@ -128,7 +140,8 @@ def create_early_stopping_forward(original_forward, target_layer):
             x = x * synthesis.output_scale
         
         # Process the captured output (minimal logging)
-        processed = reduce_channels_pca_fast(x)
+        use_fixed_pca = getattr(synthesis, '_use_fixed_pca', False)
+        processed = reduce_channels_pca_fast(x, use_fixed_pca=use_fixed_pca)
         if processed is None:
             # ws is already unbound, need to stack it back
             ws_stacked = torch.stack(ws, dim=1)
@@ -141,11 +154,14 @@ def create_early_stopping_forward(original_forward, target_layer):
 original_hallucinate = LucidSonicDream.hallucinate
 original_generate_frames = LucidSonicDream.generate_frames
 
-def fast_patched_hallucinate(self, capture_layer=None, **kwargs):
+def fast_patched_hallucinate(self, capture_layer=None, use_fixed_pca=False, **kwargs):
     """Fast layer capture"""
     self._capture_layer = capture_layer
+    self._use_fixed_pca = use_fixed_pca
     if capture_layer:
         print(f"🚀 Fast layer capture: {capture_layer}")
+        if use_fixed_pca:
+            print(f"🎨 Using fixed PCA components from first frame")
     return original_hallucinate(self, **kwargs)
 
 def fast_patched_generate_frames(self):
@@ -162,6 +178,9 @@ def fast_patched_generate_frames(self):
             original_synthesis_forward, 
             target_layer
         )
+        
+        # Set the fixed PCA flag on the synthesis object
+        self.Gs.synthesis._use_fixed_pca = getattr(self, '_use_fixed_pca', False)
         
         # Replace synthesis forward method
         self.Gs.synthesis.forward = early_stopping_forward

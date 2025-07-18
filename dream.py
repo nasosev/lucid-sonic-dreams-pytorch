@@ -88,6 +88,11 @@ if __name__ == "__main__":
         default="rbg",
         help="PCA component order for RGB channels (default: rbg). Examples: rgb, grb, gbr, brg, bgr",
     )
+    parser.add_argument(
+        "--fixed-pca",
+        action="store_true",
+        help="Use fixed PCA components from first frame to prevent color shifts between batches",
+    )
 
     args = parser.parse_args()
 
@@ -98,9 +103,12 @@ if __name__ == "__main__":
     # Get layer capture argument (optional)
     capture_layer = args.layer
     pca_order = args.pca.lower()
+    use_fixed_pca = args.fixed_pca
     if capture_layer:
         print(f"Using layer capture: {capture_layer}")
         print(f"Using PCA component order: {pca_order}")
+        if use_fixed_pca:
+            print(f"Using fixed PCA components from first frame")
         # Set PCA order globally for the patch
         globals()["PCA_ORDER"] = pca_order
         # Add the fast layer extraction patch (optimized for performance)
@@ -159,18 +167,19 @@ if __name__ == "__main__":
         "file_name": output_filename,
         "fps": 24,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
-        "pulse_react": 0.1,  # Gentler pulse reactions (default is 0.5)
+        "pulse_react": 0.3,  # Gentler pulse reactions (default is 0.5)
         "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
         "motion_randomness": 0.1,  # Less random motion (default is 0.5)
-        "contrast_strength": 0.25,
-        "flash_strength": 0.25,
-        "batch_size": 12,
+        "contrast_strength": 0.3,
+        "flash_strength": 0.3,
+        "batch_size": 4,
         "save_frames": True,
     }
 
     # Add layer capture if specified
     if capture_layer:
         hallucinate_params["capture_layer"] = capture_layer
+        hallucinate_params["use_fixed_pca"] = use_fixed_pca
         print(f"🎨 Generating psychedelic video with layer: {capture_layer}")
 
     L.hallucinate(**hallucinate_params)
