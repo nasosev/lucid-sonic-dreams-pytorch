@@ -81,6 +81,7 @@ class LucidSonicDream:
         latent_center: np.ndarray = None,  # New optional parameter
         latent_radius: float = None,  # New optional parameter
         seed: int = None,  # New optional parameter for reproducibility
+        verbose: bool = False,  # Enable detailed timing logs
     ):
         # If style is a function, raise exception if function does not take
         # noise_batch or class_batch parameters
@@ -115,6 +116,7 @@ class LucidSonicDream:
         self.latent_center = latent_center
         self.latent_radius = latent_radius
         self.seed = seed
+        self.verbose = verbose
 
         # Initialize optimized audio processor
         self._audio_processor = OptimizedAudioProcessor()
@@ -862,14 +864,27 @@ class LucidSonicDream:
                         synthesis_time = time.time() - synthesis_start
                         
                         postprocess_start = time.time()
-                        # Convert tensor output to uint8 numpy array
-                        image_batch = (
-                            (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
-                            .clamp(0, 255)
-                            .to(torch.uint8)
-                            .cpu()
-                            .numpy()
-                        )
+                        # AGGRESSIVE post-processing optimization - skip unnecessary conversions
+                        with torch.no_grad():
+                            # Direct conversion path optimized for MPS
+                            if image_batch.dtype == torch.float16:
+                                # Use optimized scaling for FP16 - avoid intermediate FP32
+                                image_batch = (
+                                    image_batch.permute(0, 2, 3, 1)  # NCHW → NHWC
+                                    .mul(127.5).add(128)             # Direct FP16 operations
+                                    .clamp(0, 255)                   # Keep in FP16
+                                    .to(torch.uint8)                 # Direct FP16 → uint8
+                                    .cpu().numpy()
+                                )
+                            else:
+                                # Standard path for FP32
+                                image_batch = (
+                                    image_batch.permute(0, 2, 3, 1)
+                                    .mul_(127.5).add_(128)
+                                    .clamp_(0, 255)
+                                    .to(torch.uint8)
+                                    .cpu().numpy()
+                                )
                         postprocess_time = time.time() - postprocess_start
 
                         # Clear MPS cache to free memory after inference
@@ -877,21 +892,22 @@ class LucidSonicDream:
                         torch.mps.empty_cache()
                         cache_time = time.time() - cache_start
                         
-                        # DETAILED LOGGING
-                        total_time = device_time + mapping_time + synthesis_time + postprocess_time + cache_time
-                        print(f"📊 BATCH {i} DETAILED TIMING (batch_size={batch_size}):")
-                        print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
-                        print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
-                        print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
-                        print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
-                        print(f"  Cache clearing: {cache_time:.3f}s ({cache_time/total_time*100:.1f}%)")
-                        print(f"  TOTAL BATCH TIME: {total_time:.3f}s")
-                        
-                        # Calculate effective throughput
-                        fps_effective = batch_size / total_time
-                        print(f"  Effective FPS: {fps_effective:.1f} frames/sec")
-                        print(f"  Time per frame: {total_time/batch_size:.3f}s")
-                        print()
+                        # DETAILED LOGGING (only if verbose enabled)
+                        if self.verbose:
+                            total_time = device_time + mapping_time + synthesis_time + postprocess_time + cache_time
+                            print(f"📊 BATCH {i} DETAILED TIMING (batch_size={batch_size}):")
+                            print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
+                            print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
+                            print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
+                            print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
+                            print(f"  Cache clearing: {cache_time:.3f}s ({cache_time/total_time*100:.1f}%)")
+                            print(f"  TOTAL BATCH TIME: {total_time:.3f}s")
+                            
+                            # Calculate effective throughput
+                            fps_effective = batch_size / total_time
+                            print(f"  Effective FPS: {fps_effective:.1f} frames/sec")
+                            print(f"  Time per frame: {total_time/batch_size:.3f}s")
+                            print()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
                 if batch_size == 1 and image_batch.ndim == 3:
@@ -905,10 +921,11 @@ class LucidSonicDream:
                 futures.append(future)
                 effects_io_time = time.time() - effects_io_start
                 
-                # Log effects + I/O submission time
-                print(f"  Effects + I/O submission: {effects_io_time:.3f}s")
-                print(f"🔄 Total batch processing time: {time.time() - batch_start_time:.3f}s")
-                print("="*60)
+                # Log effects + I/O submission time (only if verbose enabled)
+                if self.verbose:
+                    print(f"  Effects + I/O submission: {effects_io_time:.3f}s")
+                    print(f"🔄 Total batch processing time: {time.time() - batch_start_time:.3f}s")
+                    print("="*60)
 
             # Wait for all image-saving tasks to complete
             concurrent.futures.wait(futures)

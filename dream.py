@@ -93,6 +93,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use fixed PCA components from first frame to prevent color shifts between batches",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable detailed timing and profiling logs",
+    )
 
     args = parser.parse_args()
 
@@ -156,6 +161,7 @@ if __name__ == "__main__":
         latent_center=latent_center,
         latent_radius=latent_radius,
         seed=seed_value,
+        verbose=args.verbose,
     )
 
     # Generate output filename from input audio file
@@ -167,12 +173,11 @@ if __name__ == "__main__":
         "file_name": output_filename,
         "fps": 24,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
-        "pulse_react": 0.5,  # Gentler pulse reactions (default is 0.5)
+        "pulse_react": 0.6,  # Stronger pulse reactions (default is 0.5)
         "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
-        "motion_randomness": 0.3,  # Less random motion (default is 0.5)
-        "contrast_strength": 0.3,
+        "contrast_strength": 0.2,
         "flash_strength": 0.2,
-        "batch_size": 4,
+        "batch_size": 8,
         "save_frames": True,
     }
 

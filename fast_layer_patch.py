@@ -152,20 +152,24 @@ def create_early_stopping_forward(original_forward, target_layer):
             x = x * synthesis.output_scale
         
         # LAYER PROFILING: Print detailed breakdown every 5 batches to reduce spam
-        if not hasattr(synthesis, '_profile_counter'):
-            synthesis._profile_counter = 0
+        # Check if verbose mode is enabled (passed through from main instance)
+        verbose_enabled = getattr(synthesis, '_verbose_enabled', False)
         
-        if synthesis._profile_counter % 5 == 0:
-            total_layer_time = sum(t for _, t in layer_times)
-            print(f"\n🔍 LAYER-BY-LAYER SYNTHESIS TIMING (Batch {synthesis._profile_counter}, Early Stopping at {target_layer}):")
-            print(f"  Input layer: {input_time:.3f}s")
-            for name, layer_time in layer_times:
-                pct = (layer_time / total_layer_time) * 100 if total_layer_time > 0 else 0
-                print(f"  {name}: {layer_time:.3f}s ({pct:.1f}%)")
-            print(f"  Total synthesis: {input_time + total_layer_time:.3f}s")
-            print()
+        if verbose_enabled:
+            if not hasattr(synthesis, '_profile_counter'):
+                synthesis._profile_counter = 0
             
-        synthesis._profile_counter += 1
+            if synthesis._profile_counter % 5 == 0:
+                total_layer_time = sum(t for _, t in layer_times)
+                print(f"\n🔍 LAYER-BY-LAYER SYNTHESIS TIMING (Batch {synthesis._profile_counter}, Early Stopping at {target_layer}):")
+                print(f"  Input layer: {input_time:.3f}s")
+                for name, layer_time in layer_times:
+                    pct = (layer_time / total_layer_time) * 100 if total_layer_time > 0 else 0
+                    print(f"  {name}: {layer_time:.3f}s ({pct:.1f}%)")
+                print(f"  Total synthesis: {input_time + total_layer_time:.3f}s")
+                print()
+                
+            synthesis._profile_counter += 1
         
         # Process the captured output (minimal logging)
         use_fixed_pca = getattr(synthesis, '_use_fixed_pca', False)
@@ -207,8 +211,9 @@ def fast_patched_generate_frames(self):
             target_layer
         )
         
-        # Set the fixed PCA flag on the synthesis object
+        # Set the fixed PCA flag and verbose mode on the synthesis object
         self.Gs.synthesis._use_fixed_pca = getattr(self, '_use_fixed_pca', False)
+        self.Gs.synthesis._verbose_enabled = getattr(self, 'verbose', False)
         
         # Replace synthesis forward method
         self.Gs.synthesis.forward = early_stopping_forward
