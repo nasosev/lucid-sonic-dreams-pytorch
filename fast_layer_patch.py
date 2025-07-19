@@ -112,7 +112,8 @@ def create_early_stopping_forward(original_forward, target_layer):
     """Create early stopping version of synthesis forward pass"""
     
     def early_stopping_forward(ws, **layer_kwargs):
-        """Modified forward pass that stops at target layer"""
+        """Modified forward pass that stops at target layer - WITH LAYER PROFILING"""
+        import time
         
         # Convert to the expected format
         ws = ws.to(torch.float32).unbind(dim=1)
@@ -120,8 +121,10 @@ def create_early_stopping_forward(original_forward, target_layer):
         # Get the synthesis object from the method
         synthesis = original_forward.__self__
         
-        # Start with input layer
+        # LAYER PROFILING: Input layer timing
+        input_start = time.time()
         x = synthesis.input(ws[0])
+        input_time = time.time() - input_start
         
         # Find target layer index
         target_index = get_layer_index(synthesis, target_layer)
@@ -130,9 +133,15 @@ def create_early_stopping_forward(original_forward, target_layer):
             ws_stacked = torch.stack(ws, dim=1)
             return original_forward(ws_stacked, **layer_kwargs)
         
-        # Execute layers up to and including target (minimal logging)
+        # LAYER PROFILING: Track each layer's timing
+        layer_times = []
+        
+        # Execute layers up to and including target
         for idx, (name, w) in enumerate(zip(synthesis.layer_names, ws[1:])):
+            layer_start = time.time()
             x = getattr(synthesis, name)(x, w, **layer_kwargs)
+            layer_time = time.time() - layer_start
+            layer_times.append((name, layer_time))
             
             # Stop immediately after target layer
             if idx == target_index:
@@ -141,6 +150,22 @@ def create_early_stopping_forward(original_forward, target_layer):
         # Apply output scaling if needed
         if hasattr(synthesis, 'output_scale') and synthesis.output_scale != 1:
             x = x * synthesis.output_scale
+        
+        # LAYER PROFILING: Print detailed breakdown every 5 batches to reduce spam
+        if not hasattr(synthesis, '_profile_counter'):
+            synthesis._profile_counter = 0
+        
+        if synthesis._profile_counter % 5 == 0:
+            total_layer_time = sum(t for _, t in layer_times)
+            print(f"\n🔍 LAYER-BY-LAYER SYNTHESIS TIMING (Batch {synthesis._profile_counter}, Early Stopping at {target_layer}):")
+            print(f"  Input layer: {input_time:.3f}s")
+            for name, layer_time in layer_times:
+                pct = (layer_time / total_layer_time) * 100 if total_layer_time > 0 else 0
+                print(f"  {name}: {layer_time:.3f}s ({pct:.1f}%)")
+            print(f"  Total synthesis: {input_time + total_layer_time:.3f}s")
+            print()
+            
+        synthesis._profile_counter += 1
         
         # Process the captured output (minimal logging)
         use_fixed_pca = getattr(synthesis, '_use_fixed_pca', False)
