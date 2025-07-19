@@ -14,6 +14,8 @@ import soundfile
 import moviepy.editor as mpy
 import pygit2
 from importlib import import_module
+import time
+import logging
 
 from .helper_functions import *
 from .sample_effects import *
@@ -546,7 +548,7 @@ class LucidSonicDream:
             self.contrast_strength = self.contrast_strength or 0.5
             self.contrast_percussive = self.contrast_percussive or True
 
-            contrast = EffectsGenerator(
+            contrast = BatchEffectsGenerator(
                 audio=self.contrast_audio,
                 func=contrast_effect,
                 strength=self.contrast_strength,
@@ -565,7 +567,7 @@ class LucidSonicDream:
             self.flash_strength = self.flash_strength or 0.5
             self.flash_percussive = self.flash_percussive or True
 
-            flash = EffectsGenerator(
+            flash = BatchEffectsGenerator(
                 audio=self.flash_audio,
                 func=flash_effect,
                 strength=self.flash_strength,
@@ -655,18 +657,33 @@ class LucidSonicDream:
             ds, batch_size=batch_size, pin_memory=False, shuffle=False, num_workers=0
         )
 
+        # Performance monitoring
+        batch_times = []
+        stylegan_times = []
+        effects_times = []
+        io_times = []
+        
         # executor = concurrent.futures.ProcessPoolExecutor()
         # Generate frames - remove unnecessary ThreadPoolExecutor wrapper
         for i, (noise_batch, class_batch) in enumerate(
             tqdm(dl, position=0, desc="Generating frames")
         ):
+            batch_start = time.time()
             # If style is a custom function, pass batches to the function
             if callable(self.style):
+                stylegan_start = time.time()
                 image_batch = self.style(
                     noise_batch=noise_batch, class_batch=class_batch
                 )
+                stylegan_times.append(time.time() - stylegan_start)
             # Otherwise, generate frames with StyleGAN
             else:
+                stylegan_start = time.time()
+                
+                # Log memory usage before StyleGAN3 inference
+                if torch.backends.mps.is_available():
+                    print(f"🔍 Batch {i}: batch_size={batch_size}, MPS available")
+                
                 if self.use_tf:
                     noise_batch = noise_batch.numpy()
                     class_batch = class_batch.numpy()
@@ -678,19 +695,28 @@ class LucidSonicDream:
                     )
                     image_batch = np.array(image_batch)
                 else:
-                    # Direct conversion to MPS device without redundant operations
+                    # DETAILED PROFILING: Track each step separately
+                    device_start = time.time()
                     noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
                     class_tensor = class_batch.to(device=device, dtype=torch.float32)
-
+                    device_time = time.time() - device_start
+                    
+                    mapping_start = time.time()
                     with torch.no_grad():
                         w_batch = self.Gs.mapping(
                             noise_tensor,
                             class_tensor,
                             truncation_psi=self.truncation_psi,
                         )
+                    mapping_time = time.time() - mapping_start
+                    
+                    synthesis_start = time.time()
+                    with torch.no_grad():
                         image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                    synthesis_time = time.time() - synthesis_start
 
                     # Keep batch dimension for efficient processing
+                    postprocess_start = time.time()
                     image_ready = (
                         (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
                         .clamp(0, 255)
@@ -698,8 +724,42 @@ class LucidSonicDream:
                         .cpu()
                         .numpy()
                     )
-                    # Direct call instead of unnecessary executor submit
-                    self.images_saver(image_ready, batch_size * i, resolution)
+                    postprocess_time = time.time() - postprocess_start
+                    
+                    # DETAILED LOGGING
+                    total_time = device_time + mapping_time + synthesis_time + postprocess_time
+                    print(f"📊 BATCH {i} DETAILED TIMING:")
+                    print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
+                    print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
+                    print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
+                    print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
+                    print(f"  Total StyleGAN: {total_time:.3f}s")
+                stylegan_times.append(time.time() - stylegan_start)
+                
+                # Apply effects and save images
+                io_start = time.time()
+                self.images_saver(image_ready, batch_size * i, resolution)
+                io_time = time.time() - io_start
+                io_times.append(io_time)
+                
+                # LOG I/O PERFORMANCE
+                print(f"  Effects + I/O: {io_time:.3f}s")
+                print(f"  TOTAL BATCH TIME: {time.time() - batch_start:.3f}s")
+                print("=" * 50)
+            
+            batch_times.append(time.time() - batch_start)
+        
+        # Log performance statistics
+        if batch_times:
+            avg_batch_time = np.mean(batch_times)
+            avg_stylegan_time = np.mean(stylegan_times) if stylegan_times else 0
+            avg_io_time = np.mean(io_times) if io_times else 0
+            
+            logging.info(f"Performance Summary (batch_size={batch_size}):")
+            logging.info(f"  Average batch time: {avg_batch_time:.3f}s")
+            logging.info(f"  StyleGAN inference: {avg_stylegan_time:.3f}s ({avg_stylegan_time/avg_batch_time*100:.1f}%)")
+            logging.info(f"  Effects + I/O: {avg_io_time:.3f}s ({avg_io_time/avg_batch_time*100:.1f}%)")
+            logging.info(f"  Frames per second: {batch_size/avg_batch_time:.2f} fps")
 
     def generate_frames(self):
         """Generate GAN output for each frame of video."""
@@ -777,17 +837,31 @@ class LucidSonicDream:
                         )
                         image_batch = np.array(image_batch)
                     else:
+                        # DETAILED PROFILING: Track each step separately
+                        batch_start_time = time.time()
+                        
+                        device_start = time.time()
                         # For PyTorch: move to device and run synthesis with no_grad
                         # Use .to() for existing tensors instead of torch.tensor()
                         noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
                         class_tensor = class_batch.to(device=device, dtype=torch.float32)
+                        device_time = time.time() - device_start
+                        
+                        mapping_start = time.time()
                         with torch.no_grad():
                             w_batch = self.Gs.mapping(
                                 noise_tensor,
                                 class_tensor,
                                 truncation_psi=self.truncation_psi,
                             )
+                        mapping_time = time.time() - mapping_start
+                        
+                        synthesis_start = time.time()
+                        with torch.no_grad():
                             image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                        synthesis_time = time.time() - synthesis_start
+                        
+                        postprocess_start = time.time()
                         # Convert tensor output to uint8 numpy array
                         image_batch = (
                             (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
@@ -796,45 +870,138 @@ class LucidSonicDream:
                             .cpu()
                             .numpy()
                         )
+                        postprocess_time = time.time() - postprocess_start
 
                         # Clear MPS cache to free memory after inference
+                        cache_start = time.time()
                         torch.mps.empty_cache()
+                        cache_time = time.time() - cache_start
+                        
+                        # DETAILED LOGGING
+                        total_time = device_time + mapping_time + synthesis_time + postprocess_time + cache_time
+                        print(f"📊 BATCH {i} DETAILED TIMING (batch_size={batch_size}):")
+                        print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
+                        print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
+                        print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
+                        print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
+                        print(f"  Cache clearing: {cache_time:.3f}s ({cache_time/total_time*100:.1f}%)")
+                        print(f"  TOTAL BATCH TIME: {total_time:.3f}s")
+                        
+                        # Calculate effective throughput
+                        fps_effective = batch_size / total_time
+                        print(f"  Effective FPS: {fps_effective:.1f} frames/sec")
+                        print(f"  Time per frame: {total_time/batch_size:.3f}s")
+                        print()
 
                 # Ensure image_batch has shape (batch_size, height, width, channels)
                 if batch_size == 1 and image_batch.ndim == 3:
                     image_batch = np.expand_dims(image_batch, axis=0)
 
-                # Submit the image saving task to the executor
+                # Submit the image saving task to the executor with timing
+                effects_io_start = time.time()
                 future = executor.submit(
                     self.images_saver, image_batch, batch_size * i, resolution
                 )
                 futures.append(future)
+                effects_io_time = time.time() - effects_io_start
+                
+                # Log effects + I/O submission time
+                print(f"  Effects + I/O submission: {effects_io_time:.3f}s")
+                print(f"🔄 Total batch processing time: {time.time() - batch_start_time:.3f}s")
+                print("="*60)
 
             # Wait for all image-saving tasks to complete
             concurrent.futures.wait(futures)
 
     def images_saver(self, image, current_counter: int, resolution):
-        # Process each image with correct audio-reactive effects
+        # Apply batch effects if possible, otherwise fall back to per-frame
+        processed_batch = self._apply_batch_effects(image, current_counter)
+        
+        # Prepare tasks for parallel saving
         tasks = []
-        for j, array in enumerate(image):
+        for j, array in enumerate(processed_batch):
             file_name = str(current_counter + j).zfill(len(str(len(self.noise))))
-            # Apply audio-reactive effects per frame
-            for effect in self.custom_effects:
-                array = effect.apply_effect(array=array, index=current_counter + j)
             tasks.append((file_name, array))
 
-        # Optimized file I/O operations
-        def save_single_image(args):
-            file_name, final_image = args
-            # Use PNG instead of TIFF for faster I/O
-            if resolution and final_image.shape[0] != resolution:
+        # Store resolution for async save method
+        self.resolution = resolution
+        
+        # Use the new async save method
+        self._async_save_batch(tasks)
+    
+    def _apply_batch_effects(self, image_batch, current_counter):
+        """Apply effects to a batch of images, using vectorized operations when possible"""
+        if not self.custom_effects:
+            return image_batch
+            
+        # Convert to numpy array if it's not already
+        if isinstance(image_batch, list):
+            processed_batch = np.array(image_batch)
+        else:
+            processed_batch = image_batch.copy()
+        
+        # Track timing for effects processing
+        effects_start = time.time()
+        
+        # Apply each effect to the entire batch
+        for effect in self.custom_effects:
+            if hasattr(effect, 'apply_batch_effect'):
+                # Use batch processing if available
+                logging.debug(f"Using batch processing for {type(effect).__name__}")
+                processed_batch = effect.apply_batch_effect(processed_batch, current_counter)
+            else:
+                # Fallback to per-frame processing
+                logging.debug(f"Using per-frame processing for {type(effect).__name__}")
+                for j in range(processed_batch.shape[0]):
+                    processed_batch[j] = effect.apply_effect(
+                        array=processed_batch[j], 
+                        index=current_counter + j
+                    )
+        
+        # Memory management - ensure we don't hold onto large arrays longer than needed
+        if hasattr(self, '_last_batch_cache'):
+            del self._last_batch_cache
+        self._last_batch_cache = processed_batch
+        
+        return processed_batch
+    
+    def _async_save_batch(self, tasks, max_workers=None):
+        """Asynchronously save a batch of images with memory management"""
+        if not tasks:
+            return
+            
+        # Determine optimal worker count based on task size and system resources
+        if max_workers is None:
+            max_workers = min(len(tasks), 8, os.cpu_count() or 4)
+        
+        # Use context manager to ensure proper cleanup
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all save tasks
+            futures = []
+            for task in tasks:
+                future = executor.submit(self._save_single_image, task)
+                futures.append(future)
+            
+            # Wait for completion with timeout to prevent hanging
+            try:
+                concurrent.futures.wait(futures, timeout=30.0)
+            except concurrent.futures.TimeoutError:
+                logging.warning("Some image save operations timed out")
+    
+    def _save_single_image(self, task):
+        """Save a single image with error handling"""
+        try:
+            file_name, final_image = task
+            
+            # Resize if needed
+            if hasattr(self, 'resolution') and self.resolution and final_image.shape[0] != self.resolution:
                 # Use cv2 for faster resizing if available, fallback to PIL
                 try:
                     import cv2
-                    final_image = cv2.resize(final_image, (resolution, resolution))
+                    final_image = cv2.resize(final_image, (self.resolution, self.resolution))
                 except ImportError:
                     final_image_PIL = Image.fromarray(final_image, mode="RGB")
-                    final_image_PIL = final_image_PIL.resize((resolution, resolution))
+                    final_image_PIL = final_image_PIL.resize((self.resolution, self.resolution))
                     final_image = np.array(final_image_PIL)
 
             # Save as PNG for better compression and speed
@@ -842,10 +1009,8 @@ class LucidSonicDream:
                 os.path.join(self.frames_dir, file_name + ".png"),
                 optimize=True
             )
-
-        # Process file saves in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            executor.map(save_single_image, tasks)
+        except Exception as e:
+            logging.error(f"Failed to save image {file_name}: {e}")
 
     def hallucinate(
         self,
@@ -1060,4 +1225,96 @@ class EffectsGenerator:
 
         amplitude = self.spec[index]
         return self.func(array=array, strength=self.strength, amplitude=amplitude)
+    
+    def apply_batch_effect(self, batch_array, start_index):
+        """Apply effect to a batch of images"""
+        batch_size = batch_array.shape[0]
+        
+        # Get amplitudes for the entire batch
+        end_index = start_index + batch_size
+        amplitudes = self.spec[start_index:end_index]
+        
+        # Apply effect frame by frame (fallback for non-vectorized effects)
+        result = np.zeros_like(batch_array)
+        for i in range(batch_size):
+            result[i] = self.func(
+                array=batch_array[i], 
+                strength=self.strength, 
+                amplitude=amplitudes[i]
+            )
+        return result
+
+
+class BatchEffectsGenerator(EffectsGenerator):
+    """Optimized effects generator that supports true batch processing"""
+    
+    def __init__(self, func, audio: str = None, strength: float = 0.5, percussive: bool = True):
+        super().__init__(func, audio, strength, percussive)
+        
+        # Check if function supports batch operations
+        self.supports_batch = self._check_batch_support()
+    
+    def _check_batch_support(self):
+        """Test if the effect function can handle 4D batch arrays"""
+        try:
+            # Create a small test batch
+            test_batch = np.random.randint(0, 255, (2, 8, 8, 3), dtype=np.uint8)
+            result = self.func(array=test_batch, strength=0.1, amplitude=0.5)
+            return result.shape == test_batch.shape and result.ndim == 4
+        except:
+            return False
+    
+    def apply_batch_effect(self, batch_array, start_index):
+        """Apply effect to a batch of images with vectorized operations when possible"""
+        batch_size = batch_array.shape[0]
+        
+        # Get amplitudes for the entire batch
+        end_index = start_index + batch_size
+        amplitudes = self.spec[start_index:end_index]
+        
+        if self.supports_batch:
+            # Use vectorized batch processing
+            # For batch effects, we use the mean amplitude for the entire batch
+            # or could apply per-frame amplitudes differently based on effect design
+            mean_amplitude = np.mean(amplitudes)
+            return self.func(array=batch_array, strength=self.strength, amplitude=mean_amplitude)
+        else:
+            # Fallback to per-frame processing
+            return super().apply_batch_effect(batch_array, start_index)
+
+
+class GPUBatchEffectsGenerator(BatchEffectsGenerator):
+    """GPU-accelerated effects generator that keeps tensors on GPU longer"""
+    
+    def __init__(self, func, audio: str = None, strength: float = 0.5, percussive: bool = True):
+        super().__init__(func, audio, strength, percussive)
+        
+        # Check if we have GPU/MPS available
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        self.use_gpu = torch.backends.mps.is_available()
+    
+    def apply_batch_effect_gpu(self, tensor_batch, start_index):
+        """Apply effect to a batch of tensors on GPU"""
+        batch_size = tensor_batch.shape[0]
+        
+        # Get amplitudes for the entire batch
+        end_index = start_index + batch_size
+        amplitudes = self.spec[start_index:end_index]
+        
+        if self.supports_batch:
+            # Use vectorized batch processing with mean amplitude
+            mean_amplitude = np.mean(amplitudes)
+            return self.func(array=tensor_batch, strength=self.strength, amplitude=mean_amplitude)
+        else:
+            # Convert to numpy, apply effects, convert back
+            numpy_batch = tensor_batch.cpu().numpy()
+            result_numpy = super().apply_batch_effect(numpy_batch, start_index)
+            return torch.from_numpy(result_numpy).to(self.device)
+    
+    def apply_batch_effect(self, batch_array, start_index):
+        """Apply effect to a batch - handles both numpy and tensor inputs"""
+        if isinstance(batch_array, torch.Tensor) and self.use_gpu:
+            return self.apply_batch_effect_gpu(batch_array, start_index)
+        else:
+            return super().apply_batch_effect(batch_array, start_index)
 

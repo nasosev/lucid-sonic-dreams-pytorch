@@ -10,5 +10,5 @@ gen.py
 .DS_Store
 *.tiff
 song.wav
-stylegan3/
+# stylegan3/ - removed for MPS-exclusive fork to track optimizations
 *.png

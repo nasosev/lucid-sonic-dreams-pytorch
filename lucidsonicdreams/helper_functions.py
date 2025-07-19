@@ -70,7 +70,7 @@ def consolidate_models():
 
 def get_spec_norm(wav, sr, n_mels, hop_length):
     """Obtain maximum value for each time-frame in Mel Spectrogram,
-    and normalize between 0 and 1"""
+    and normalize using local windowing for better reactivity on long clips"""
 
     # Generate Mel Spectrogram
     spec_raw = librosa.feature.melspectrogram(
@@ -80,8 +80,29 @@ def get_spec_norm(wav, sr, n_mels, hop_length):
     # Obtain maximum value per time-frame
     spec_max = np.amax(spec_raw, axis=0)
 
-    # Normalize all values between 0 and 1
-    spec_norm = (spec_max - np.min(spec_max)) / np.ptp(spec_max)
+    # Use local normalization with rolling window for better reactivity
+    # Window size: ~4 seconds worth of frames for local context
+    window_frames = max(1, int(4 * sr / hop_length))
+    
+    # Apply local normalization using rolling statistics
+    spec_norm = np.zeros_like(spec_max)
+    
+    for i in range(len(spec_max)):
+        # Define local window boundaries
+        start_idx = max(0, i - window_frames // 2)
+        end_idx = min(len(spec_max), i + window_frames // 2 + 1)
+        
+        # Get local window
+        local_window = spec_max[start_idx:end_idx]
+        
+        # Local normalization with fallback for edge cases
+        local_min = np.min(local_window)
+        local_range = np.ptp(local_window)
+        
+        if local_range > 0:
+            spec_norm[i] = (spec_max[i] - local_min) / local_range
+        else:
+            spec_norm[i] = 0.5  # Neutral value when no variation
 
     return spec_norm
 

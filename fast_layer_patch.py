@@ -41,57 +41,60 @@ def apply_pca_reordering(tensor, pca_order="rbg"):
 _fixed_pca_model = None
 
 def reduce_channels_pca_fast(tensor, n_components=3, use_fixed_pca=False):
-    """Fast PCA reduction - optimized for performance"""
+    """Fast PCA reduction - VECTORIZED BATCH PROCESSING OPTIMIZATION"""
+    import time
+    
     if tensor.ndim != 4:
         return None
     
     batch, channels, height, width = tensor.shape
+    start_time = time.time()
     
-    # Collect all batch data for per-batch PCA fitting (preserve spatial structure)
-    all_batch_data = []
-    for b in range(batch):
-        reshaped = tensor[b].permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
-        all_batch_data.append(reshaped)
+    # VECTORIZED BATCH PROCESSING - process entire batch at once
+    # Reshape entire batch: [batch, channels, height, width] -> [batch * height * width, channels]
+    batch_reshaped = tensor.permute(0, 2, 3, 1).reshape(-1, channels)
+    
+    # Move to CPU only once for the entire batch
+    batch_data_cpu = batch_reshaped.cpu().numpy()
     
     # Use fixed PCA model if available and requested
     global _fixed_pca_model
     if use_fixed_pca and _fixed_pca_model is not None:
         pca = _fixed_pca_model
     else:
-        # Concatenate all batch data and fit single PCA model for consistency
-        combined_data = np.concatenate(all_batch_data, axis=0)  # [total_pixels, channels]
+        # Fit PCA on the entire batch data at once
         pca = PCA(n_components=n_components)
-        pca.fit(combined_data)
+        pca.fit(batch_data_cpu)
         
         # Store the PCA model if this is the first time and fixed PCA is requested
         if use_fixed_pca and _fixed_pca_model is None:
             _fixed_pca_model = pca
     
-    # Apply the same PCA transform to each batch item
-    batch_results = []
-    for b in range(batch):
-        # Transform using the shared PCA model
-        reduced = pca.transform(all_batch_data[b])
-        reduced = reduced.reshape(height, width, n_components)
-        
-        # Convert to tensor: [n_components, height, width]
-        item_tensor = torch.from_numpy(reduced).permute(2, 0, 1).float().to(tensor.device)
-        batch_results.append(item_tensor)
+    # Apply PCA transform to entire batch at once - MAJOR SPEEDUP!
+    reduced_batch = pca.transform(batch_data_cpu)  # [batch * height * width, n_components]
     
-    # Stack batch results: [batch, n_components, height, width]
-    rgb_tensor = torch.stack(batch_results, dim=0)
+    # Reshape back to batch format: [batch * height * width, n_components] -> [batch, height, width, n_components]
+    reduced_batch = reduced_batch.reshape(batch, height, width, n_components)
+    
+    # Convert back to tensor and permute to [batch, n_components, height, width] - single GPU transfer
+    rgb_tensor = torch.from_numpy(reduced_batch).permute(0, 3, 1, 2).float().to(tensor.device)
     
     # Apply PCA reordering if specified
     if 'PCA_ORDER' in globals():
         rgb_tensor = apply_pca_reordering(rgb_tensor, globals()['PCA_ORDER'])
     
-    # Fast vectorized normalization (all channels at once)
+    # Fast vectorized normalization (all channels and batch items at once)
     rgb_flat = rgb_tensor.view(batch, n_components, -1)  # [batch, channels, pixels]
     mins = rgb_flat.min(dim=2, keepdim=True)[0].unsqueeze(-1)  # [batch, channels, 1, 1]
     maxs = rgb_flat.max(dim=2, keepdim=True)[0].unsqueeze(-1)  # [batch, channels, 1, 1]
     
+    # Vectorized normalization across entire batch
     rgb_tensor = (rgb_tensor - mins) / (maxs - mins + 1e-8)
     rgb_tensor = rgb_tensor * 2.0 - 1.0
+    
+    # Performance logging
+    processing_time = time.time() - start_time
+    print(f"🚀 VECTORIZED PCA: batch_size={batch}, {channels}→{n_components} channels, {processing_time:.3f}s")
     
     return rgb_tensor
 
