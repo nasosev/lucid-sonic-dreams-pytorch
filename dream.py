@@ -165,10 +165,11 @@ if __name__ == "__main__":
         "file_name": output_filename,
         "fps": 24,
         "speed_fpm": 6,  # Even slower scene changes (default is 12)
-        "pulse_react": 0.6,  # Stronger pulse reactions (default is 0.5)
+        "pulse_react": 0.5,  # Stronger pulse reactions (default is 0.5)
         "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
         "contrast_strength": 0.2,
         "flash_strength": 0.2,
+        "batch_size": 1,
         "save_frames": True,
     }
 
