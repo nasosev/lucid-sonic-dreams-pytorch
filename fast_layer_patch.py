@@ -40,63 +40,55 @@ def apply_pca_reordering(tensor, pca_order="rbg"):
 # Global variable to store fixed PCA components
 _fixed_pca_model = None
 
-def reduce_channels_pca_fast(tensor, n_components=3, use_fixed_pca=False):
-    """Fast PCA reduction - VECTORIZED BATCH PROCESSING OPTIMIZATION"""
-    import time
+def reduce_channels_pca_fast(tensor, n_components=3, use_fixed_pca=True):
+    """PCA reduction optimized for single frame processing"""
+    from sklearn.decomposition import PCA
     
     if tensor.ndim != 4:
         return None
     
-    batch, channels, height, width = tensor.shape
-    start_time = time.time()
+    # Single frame processing (batch_size=1)
+    channels, height, width = tensor.shape[1:]
+    device = tensor.device
     
-    # VECTORIZED BATCH PROCESSING - process entire batch at once
-    # Reshape entire batch: [batch, channels, height, width] -> [batch * height * width, channels]
-    batch_reshaped = tensor.permute(0, 2, 3, 1).reshape(-1, channels)
-    
-    # Move to CPU only once for the entire batch
-    batch_data_cpu = batch_reshaped.cpu().numpy()
-    
-    # Use fixed PCA model if available and requested
     global _fixed_pca_model
-    if use_fixed_pca and _fixed_pca_model is not None:
-        pca = _fixed_pca_model
-    else:
-        # Fit PCA on the entire batch data at once
-        pca = PCA(n_components=n_components)
-        pca.fit(batch_data_cpu)
+    
+    # Use cached components (all frames after first)
+    if _fixed_pca_model is not None:
+        components = _fixed_pca_model['components'].to(device)
+        mean = _fixed_pca_model['mean'].to(device)
         
-        # Store the PCA model if this is the first time and fixed PCA is requested
-        if use_fixed_pca and _fixed_pca_model is None:
-            _fixed_pca_model = pca
+        data = tensor.squeeze(0).permute(1, 2, 0).reshape(-1, channels).float()
+        reduced_data = (data - mean) @ components.T
+    else:
+        # First time: high-quality CPU PCA
+        data = tensor.squeeze(0).permute(1, 2, 0).reshape(-1, channels).cpu().numpy()
+        pca = PCA(n_components=n_components)
+        pca.fit(data)
+        reduced_data = pca.transform(data)
+        
+        # Cache components for all subsequent frames
+        _fixed_pca_model = {
+            'components': torch.from_numpy(pca.components_).float(),
+            'mean': torch.from_numpy(pca.mean_).float()
+        }
+        
+        reduced_data = torch.from_numpy(reduced_data).to(device)
     
-    # Apply PCA transform to entire batch at once - MAJOR SPEEDUP!
-    reduced_batch = pca.transform(batch_data_cpu)  # [batch * height * width, n_components]
+    # Reshape to single frame
+    rgb_tensor = reduced_data.reshape(height, width, n_components).permute(2, 0, 1).unsqueeze(0)
     
-    # Reshape back to batch format: [batch * height * width, n_components] -> [batch, height, width, n_components]
-    reduced_batch = reduced_batch.reshape(batch, height, width, n_components)
-    
-    # Convert back to tensor and permute to [batch, n_components, height, width] - single GPU transfer
-    rgb_tensor = torch.from_numpy(reduced_batch).permute(0, 3, 1, 2).float().to(tensor.device)
-    
-    # Apply PCA reordering if specified
     if 'PCA_ORDER' in globals():
         rgb_tensor = apply_pca_reordering(rgb_tensor, globals()['PCA_ORDER'])
     
-    # Fast vectorized normalization (all channels and batch items at once)
-    rgb_flat = rgb_tensor.view(batch, n_components, -1)  # [batch, channels, pixels]
-    mins = rgb_flat.min(dim=2, keepdim=True)[0].unsqueeze(-1)  # [batch, channels, 1, 1]
-    maxs = rgb_flat.max(dim=2, keepdim=True)[0].unsqueeze(-1)  # [batch, channels, 1, 1]
+    # Simple normalization for single frame
+    rgb_flat = rgb_tensor.view(1, n_components, -1)
+    mins = rgb_flat.min(dim=2, keepdim=True)[0].unsqueeze(-1)
+    maxs = rgb_flat.max(dim=2, keepdim=True)[0].unsqueeze(-1)
+    range_vals = torch.where(maxs - mins < 1e-8, torch.ones_like(maxs), maxs - mins)
     
-    # Vectorized normalization across entire batch
-    rgb_tensor = (rgb_tensor - mins) / (maxs - mins + 1e-8)
-    rgb_tensor = rgb_tensor * 2.0 - 1.0
-    
-    # Performance logging
-    processing_time = time.time() - start_time
-    print(f"🚀 VECTORIZED PCA: batch_size={batch}, {channels}→{n_components} channels, {processing_time:.3f}s")
-    
-    return rgb_tensor
+    return ((rgb_tensor - mins) / range_vals) * 2.0 - 1.0
+
 
 def get_layer_index(synthesis, target_layer):
     """Get the index of target layer in layer_names list"""
@@ -151,7 +143,7 @@ def create_early_stopping_forward(original_forward, target_layer):
         if hasattr(synthesis, 'output_scale') and synthesis.output_scale != 1:
             x = x * synthesis.output_scale
         
-        # LAYER PROFILING: Print detailed breakdown every 5 batches to reduce spam
+        # LAYER PROFILING: Print detailed breakdown every 10 frames to reduce spam
         # Check if verbose mode is enabled (passed through from main instance)
         verbose_enabled = getattr(synthesis, '_verbose_enabled', False)
         
@@ -159,9 +151,9 @@ def create_early_stopping_forward(original_forward, target_layer):
             if not hasattr(synthesis, '_profile_counter'):
                 synthesis._profile_counter = 0
             
-            if synthesis._profile_counter % 5 == 0:
+            if synthesis._profile_counter % 10 == 0:
                 total_layer_time = sum(t for _, t in layer_times)
-                print(f"\n🔍 LAYER-BY-LAYER SYNTHESIS TIMING (Batch {synthesis._profile_counter}, Early Stopping at {target_layer}):")
+                print(f"\n🔍 LAYER-BY-LAYER SYNTHESIS TIMING (Frame {synthesis._profile_counter}, Early Stopping at {target_layer}):")
                 print(f"  Input layer: {input_time:.3f}s")
                 for name, layer_time in layer_times:
                     pct = (layer_time / total_layer_time) * 100 if total_layer_time > 0 else 0
@@ -172,8 +164,7 @@ def create_early_stopping_forward(original_forward, target_layer):
             synthesis._profile_counter += 1
         
         # Process the captured output (minimal logging)
-        use_fixed_pca = getattr(synthesis, '_use_fixed_pca', False)
-        processed = reduce_channels_pca_fast(x, use_fixed_pca=use_fixed_pca)
+        processed = reduce_channels_pca_fast(x)
         if processed is None:
             # ws is already unbound, need to stack it back
             ws_stacked = torch.stack(ws, dim=1)
@@ -186,14 +177,11 @@ def create_early_stopping_forward(original_forward, target_layer):
 original_hallucinate = LucidSonicDream.hallucinate
 original_generate_frames = LucidSonicDream.generate_frames
 
-def fast_patched_hallucinate(self, capture_layer=None, use_fixed_pca=False, **kwargs):
+def fast_patched_hallucinate(self, capture_layer=None, **kwargs):
     """Fast layer capture"""
     self._capture_layer = capture_layer
-    self._use_fixed_pca = use_fixed_pca
     if capture_layer:
-        print(f"🚀 Fast layer capture: {capture_layer}")
-        if use_fixed_pca:
-            print(f"🎨 Using fixed PCA components from first frame")
+        print(f"🚀 Fast layer capture: {capture_layer} (fixed PCA)")
     return original_hallucinate(self, **kwargs)
 
 def fast_patched_generate_frames(self):
@@ -211,8 +199,7 @@ def fast_patched_generate_frames(self):
             target_layer
         )
         
-        # Set the fixed PCA flag and verbose mode on the synthesis object
-        self.Gs.synthesis._use_fixed_pca = getattr(self, '_use_fixed_pca', False)
+        # Set verbose mode on the synthesis object
         self.Gs.synthesis._verbose_enabled = getattr(self, 'verbose', False)
         
         # Replace synthesis forward method
