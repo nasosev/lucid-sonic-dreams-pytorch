@@ -55,6 +55,15 @@ def show_styles():
     print(*styles, sep="\n")
 
 
+class MultiTensorDataset(torch.utils.data.Dataset):
+    def __init__(self, tensor_list):
+        self.tensor_list = tensor_list
+
+    def __getitem__(self, i):
+        return [t[i] for t in self.tensor_list]
+
+    def __len__(self):
+        return len(self.tensor_list[0])
 
 
 class LucidSonicDream:
@@ -111,11 +120,6 @@ class LucidSonicDream:
 
         # Initialize optimized audio processor
         self._audio_processor = OptimizedAudioProcessor()
-        
-        # Initialize tensor pools for reuse (will be allocated after batch size is known)
-        self._tensor_pools_allocated = False
-        self._noise_tensor_pool = None
-        self._class_tensor_pool = None
 
         # some stylegan models cannot be converted to pytorch (wikiart)
         self.use_tf = style in ("wikiart",)
@@ -244,125 +248,6 @@ class LucidSonicDream:
         self.wav, self.sr = audio_result['primary_audio']
 
         logging.info("Audio processing completed successfully")
-
-    def _warm_up_mps_memory(self):
-        """Pre-warm MPS memory subsystem to eliminate cold start penalty"""
-        if self.use_tf:
-            return
-            
-        print("🔥 Warming up MPS memory subsystem...")
-        start_time = time.time()
-        
-        # Create dummy tensors matching actual workload dimensions - use FP32 for StyleGAN compatibility
-        device = torch.device("mps")
-        dummy_noise = torch.randn(self.batch_size, self.input_shape, device=device, dtype=torch.float32)
-        dummy_class = torch.randn(self.batch_size, self.num_possible_classes, device=device, dtype=torch.float32)
-        
-        # Run one warmup inference pass to allocate memory pools
-        with torch.no_grad():
-            w_batch = self.Gs.mapping(dummy_noise, dummy_class, truncation_psi=1.0)
-            _ = self.Gs.synthesis(w_batch, noise_mode="const")
-        
-        # Clear cache after warmup but keep memory pools allocated
-        torch.mps.empty_cache()
-        
-        warmup_time = time.time() - start_time
-        print(f"✅ MPS memory warmed up in {warmup_time:.2f}s")
-        
-        # Enable MPS-specific optimizations
-        self._configure_mps_optimizations()
-
-    def _configure_mps_optimizations(self):
-        """Configure PyTorch and MPS-specific optimizations"""
-            
-        # Enable MPS optimizations - assume MPS is always available
-        torch.backends.mps.enabled = True
-        
-        # Apple Silicon M1/M2/M3/M4 specific optimizations
-        if hasattr(torch.backends.mps, 'max_split_size_mb'):
-            torch.backends.mps.max_split_size_mb = 256  # Smaller for FP16, better cache utilization
-            
-        # Aggressive MPS memory optimizations for Apple Silicon
-        torch.backends.mps.enable_memory_efficient_attention = True
-        
-        # Set optimal tensor memory layout for unified memory architecture
-        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-        
-        # Use FP16 where beneficial, but keep FP32 as default for StyleGAN compatibility
-        # torch.set_default_dtype(torch.float16)  # Too aggressive - causes StyleGAN issues
-        
-        # Ultra-aggressive Apple Silicon specific optimizations
-        os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = '0.0'  # No memory fragmentation
-        os.environ['PYTORCH_MPS_LOW_WATERMARK_RATIO'] = '0.0'   # Aggressive memory management
-        
-        # Apple Silicon unified memory architecture optimizations
-        torch.backends.quantized.engine = 'qnnpack'  # Optimized for ARM
-        
-        # Additional MPS optimizations to avoid CPU fallbacks
-        torch.backends.mps.enable_memory_efficient_attention = True
-        
-        # Optimize for Apple Silicon GPU characteristics
-        if hasattr(torch.backends.mps, 'enable_metal_math_opts'):
-            torch.backends.mps.enable_metal_math_opts = True
-        
-        if self.verbose:
-            print("🚀 Optimized MPS pipeline configured for Apple Silicon (StyleGAN-compatible)")
-            
-    def _log_performance_summary(self, start_time):
-        """Log comprehensive performance summary"""
-        total_time = time.time() - start_time
-        if hasattr(self, 'noise') and len(self.noise) > 0:
-            total_frames = len(self.noise)
-            fps_effective = total_frames / total_time
-            
-            print(f"\n🚀 PERFORMANCE SUMMARY:")
-            print(f"   Total execution time: {total_time:.1f}s")
-            print(f"   Total frames generated: {total_frames}")
-            print(f"   Effective FPS: {fps_effective:.2f}")
-            print(f"   Time per frame: {total_time/total_frames:.3f}s")
-            
-            if hasattr(self, 'batch_size'):
-                batches_processed = len(self.noise) // self.batch_size
-                time_per_batch = total_time / batches_processed if batches_processed > 0 else 0
-                print(f"   Batch size: {self.batch_size}")
-                print(f"   Batches processed: {batches_processed}")
-                print(f"   Time per batch: {time_per_batch:.3f}s")
-            
-            print("   🚀 MPS OPTIMIZATIONS ACTIVE:")
-            print("   ✅ MPS memory pre-warming")
-            print("   ✅ Smart cache clearing strategy") 
-            print("   ✅ Tensor pool pre-allocation")
-            print("   ✅ Native MPS power iteration PCA")
-            print("   ✅ Inference mode optimizations")
-            print("   ✅ Apple Silicon unified memory layout")
-            print("   ✅ Direct ATen memory operations")
-            print("   ✅ Zero-copy tensor reuse")
-            print("   ✅ Optimized memory formats")
-            print("   ⚡ CPU/CUDA fallbacks REMOVED")
-
-    def _smart_cache_clear(self, batch_idx, total_batches):
-        """Smart MPS cache clearing to balance memory vs performance"""
-            
-        start_time = time.time()
-        
-        # Clear cache strategically - less frequent clearing for better performance
-        # Clear every 10% of batches or minimum every 5 batches
-        cache_interval = max(5, total_batches // 10)
-        
-        # Always clear on first batch (after warmup) and last batch
-        should_clear = (
-            batch_idx == 0 or 
-            batch_idx == total_batches - 1 or 
-            batch_idx % cache_interval == 0
-        )
-        
-        if should_clear:
-            torch.mps.empty_cache()
-            if self.verbose:
-                print(f"🧹 Cleared MPS cache at batch {batch_idx}")
-        
-        return time.time() - start_time
-
 
     def transform_classes(self):
         """Transform/assign value of classes"""
@@ -557,12 +442,12 @@ class LucidSonicDream:
                 steps = int(np.floor(num_frames / len(init_noise)) - 1)
                 noise = full_frame_interpolation(init_noise, steps, num_frames)
 
-        # Pre-allocate arrays - use FP32 for numerical stability in vector generation
+        # Pre-allocate arrays for incremental updates and class vectors
         pulse_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
         motion_noise = np.zeros((num_frames, self.input_shape), dtype=np.float32)
         self.class_vecs = np.zeros((num_frames, self.num_possible_classes), dtype=np.float32)
 
-        # Base vectors for Pulse and Motion updates  
+        # Base vectors for Pulse and Motion updates
         pulse_base = np.full(self.input_shape, self.pulse_react, dtype=np.float32)
         motion_base = np.full(self.input_shape, motion_react, dtype=np.float32)
 
@@ -705,38 +590,197 @@ class LucidSonicDream:
     def process_save_image(self, queue, num_frame_batches):
         i = 0
         while True:
-            image_frame = queue.get()
-            if image_frame is None:
+            image_batch = queue.get()
+            if image_batch is None:
                 queue.task_done()
                 break
-            
-            # Apply effects to single frame
-            for effect in self.custom_effects:
-                image_frame = effect.apply_effect(array=image_frame, index=i)
+            if image_batch.ndim == 3:
+                array = image_batch
+                image_index = i * self.batch_size
+                for effect in self.custom_effects:
+                    array = effect.apply_effect(array=array, index=image_index)
 
-            # Save frame with zero-padded filename
-            max_frames = len(self.noise)
-            file_name = str(i).zfill(len(str(max_frames)))
-            self.file_names.append(file_name)
-            self.final_images.append(image_frame)
+                #   # Save. Include leading zeros in file name to keep alphabetical order
+                max_frame_index = num_frame_batches * self.batch_size + self.batch_size
+                file_name = str(image_index).zfill(len(str(max_frame_index)))
+                self.file_names.append(file_name)
+                self.final_images.append(array)
+            else:
+                for j, array in enumerate(image_batch):
+                    image_index = (i * self.batch_size) + j
+
+                    #   # Apply efects
+                    for effect in self.custom_effects:
+                        array = effect.apply_effect(array=array, index=image_index)
+
+                    #   # Save. Include leading zeros in file name to keep alphabetical order
+                    max_frame_index = (
+                        num_frame_batches * self.batch_size + self.batch_size
+                    )
+                    file_name = str(image_index).zfill(len(str(max_frame_index)))
+                    self.file_names.append(file_name)
+                    self.final_images.append(array)
             i += 1
             queue.task_done()
 
+        # def generate_frames(self):
+        """Generate GAN output for each frame of video"""
 
-    def generate_frames(self):
-        """Generate GAN output for each frame of video - single frame processing"""
         file_name = self.file_name
         resolution = self.resolution
-        
-        # Simple synthesis kwargs
+        batch_size = self.batch_size
         if self.use_tf:
             Gs_syn_kwargs = {
-                "output_transform": {"func": self.convert_images_to_uint8, "nchw_to_nhwc": True},
+                "output_transform": {
+                    "func": self.convert_images_to_uint8,
+                    "nchw_to_nhwc": True,
+                },
                 "randomize_noise": False,
-                "minibatch_size": 1,
+                "minibatch_size": batch_size,
             }
         else:
-            Gs_syn_kwargs = {"noise_mode": "const"}
+            Gs_syn_kwargs = {"noise_mode": "const"}  # random, const, None
+
+        # Set-up temporary frame directory
+        self.frames_dir = file_name.split(".mp4")[0] + "_frames"
+        if os.path.exists(self.frames_dir):
+            shutil.rmtree(self.frames_dir)
+        os.makedirs(self.frames_dir)
+
+        # create dataloader
+        # Apple Silicon MPS device
+        device = torch.device("mps")
+
+        print("Using device:", device)
+        ds = MultiTensorDataset(
+            [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
+        )
+        dl = torch.utils.data.DataLoader(
+            ds, batch_size=batch_size, pin_memory=False, shuffle=False, num_workers=0
+        )
+
+        # Performance monitoring
+        batch_times = []
+        stylegan_times = []
+        effects_times = []
+        io_times = []
+        
+        # executor = concurrent.futures.ProcessPoolExecutor()
+        # Generate frames - remove unnecessary ThreadPoolExecutor wrapper
+        for i, (noise_batch, class_batch) in enumerate(
+            tqdm(dl, position=0, desc="Generating frames")
+        ):
+            batch_start = time.time()
+            # If style is a custom function, pass batches to the function
+            if callable(self.style):
+                stylegan_start = time.time()
+                image_batch = self.style(
+                    noise_batch=noise_batch, class_batch=class_batch
+                )
+                stylegan_times.append(time.time() - stylegan_start)
+            # Otherwise, generate frames with StyleGAN
+            else:
+                stylegan_start = time.time()
+                
+                # Log memory usage before StyleGAN3 inference
+                if torch.backends.mps.is_available():
+                    print(f"🔍 Batch {i}: batch_size={batch_size}, MPS available")
+                
+                if self.use_tf:
+                    noise_batch = noise_batch.numpy()
+                    class_batch = class_batch.numpy()
+                    w_batch = self.Gs.components.mapping.run(
+                        noise_batch, np.tile(class_batch, (batch_size, 1))
+                    )
+                    image_batch = self.Gs.components.synthesis.run(
+                        w_batch, **Gs_syn_kwargs
+                    )
+                    image_batch = np.array(image_batch)
+                else:
+                    # DETAILED PROFILING: Track each step separately
+                    device_start = time.time()
+                    noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
+                    class_tensor = class_batch.to(device=device, dtype=torch.float32)
+                    device_time = time.time() - device_start
+                    
+                    mapping_start = time.time()
+                    with torch.no_grad():
+                        w_batch = self.Gs.mapping(
+                            noise_tensor,
+                            class_tensor,
+                            truncation_psi=self.truncation_psi,
+                        )
+                    mapping_time = time.time() - mapping_start
+                    
+                    synthesis_start = time.time()
+                    with torch.no_grad():
+                        image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                    synthesis_time = time.time() - synthesis_start
+
+                    # Keep batch dimension for efficient processing
+                    postprocess_start = time.time()
+                    image_ready = (
+                        (image_batch.permute(0, 2, 3, 1) * 127.5 + 128)
+                        .clamp(0, 255)
+                        .to(torch.uint8)
+                        .cpu()
+                        .numpy()
+                    )
+                    postprocess_time = time.time() - postprocess_start
+                    
+                    # DETAILED LOGGING
+                    total_time = device_time + mapping_time + synthesis_time + postprocess_time
+                    print(f"📊 BATCH {i} DETAILED TIMING:")
+                    print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
+                    print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
+                    print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
+                    print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
+                    print(f"  Total StyleGAN: {total_time:.3f}s")
+                stylegan_times.append(time.time() - stylegan_start)
+                
+                # Apply effects and save images
+                io_start = time.time()
+                self.images_saver(image_ready, batch_size * i, resolution)
+                io_time = time.time() - io_start
+                io_times.append(io_time)
+                
+                # LOG I/O PERFORMANCE
+                print(f"  Effects + I/O: {io_time:.3f}s")
+                print(f"  TOTAL BATCH TIME: {time.time() - batch_start:.3f}s")
+                print("=" * 50)
+            
+            batch_times.append(time.time() - batch_start)
+        
+        # Log performance statistics
+        if batch_times:
+            avg_batch_time = np.mean(batch_times)
+            avg_stylegan_time = np.mean(stylegan_times) if stylegan_times else 0
+            avg_io_time = np.mean(io_times) if io_times else 0
+            
+            logging.info(f"Performance Summary (batch_size={batch_size}):")
+            logging.info(f"  Average batch time: {avg_batch_time:.3f}s")
+            logging.info(f"  StyleGAN inference: {avg_stylegan_time:.3f}s ({avg_stylegan_time/avg_batch_time*100:.1f}%)")
+            logging.info(f"  Effects + I/O: {avg_io_time:.3f}s ({avg_io_time/avg_batch_time*100:.1f}%)")
+            logging.info(f"  Frames per second: {batch_size/avg_batch_time:.2f} fps")
+
+    def generate_frames(self):
+        """Generate GAN output for each frame of video."""
+        file_name = self.file_name
+        resolution = self.resolution
+        batch_size = self.batch_size
+
+        # Set synthesis kwargs based on framework choice
+        if self.use_tf:
+            Gs_syn_kwargs = {
+                "output_transform": {
+                    "func": self.convert_images_to_uint8,
+                    "nchw_to_nhwc": True,
+                },
+                "randomize_noise": False,
+                "minibatch_size": batch_size,
+            }
+        else:
+            Gs_syn_kwargs = {"noise_mode": "const"}  # Options: random, const, None
 
         # Set up temporary frame directory
         self.frames_dir = file_name.split(".mp4")[0] + "_frames"
@@ -744,50 +788,246 @@ class LucidSonicDream:
             shutil.rmtree(self.frames_dir)
         os.makedirs(self.frames_dir)
 
+        # Create dataloader from noise and class vectors
+        # Apple Silicon MPS device
         device = torch.device("mps")
         print("Using device:", device)
+        ds = MultiTensorDataset(
+            [torch.from_numpy(self.noise), torch.from_numpy(self.class_vecs)]
+        )
+
+        # Determine optimal worker count for data loading
+        optimal_workers = get_optimal_worker_count()
+
+        # Disable pin_memory for MPS as it's not supported on Apple Silicon
+        use_pin_memory = False
+
+        dl = torch.utils.data.DataLoader(
+            ds,
+            batch_size=batch_size,
+            pin_memory=use_pin_memory,
+            shuffle=False,
+            num_workers=optimal_workers
+        )
 
         self.final_images = []
         self.file_names = []
 
-        # Generate frames one by one
-        for i, (noise_vec, class_vec) in enumerate(
-            tqdm(zip(self.noise, self.class_vecs), total=len(self.noise), desc="Generating frames")
-        ):
-            if callable(self.style):
-                # Custom style function
-                image_frame = self.style(noise_batch=noise_vec[None], class_batch=class_vec[None])[0]
-            else:
-                if self.use_tf:
-                    # TensorFlow path
-                    w_vec = self.Gs.components.mapping.run(noise_vec[None], class_vec[None])
-                    image_frame = self.Gs.components.synthesis.run(w_vec, **Gs_syn_kwargs)[0]
+        # Use a ThreadPoolExecutor to handle image saving concurrently
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            for i, (noise_batch, class_batch) in enumerate(
+                tqdm(dl, position=0, desc="Generating frames")
+            ):
+                # Generate images via custom style function or StyleGAN
+                if callable(self.style):
+                    image_batch = self.style(
+                        noise_batch=noise_batch, class_batch=class_batch
+                    )
                 else:
-                    # PyTorch path
-                    noise_tensor = torch.from_numpy(noise_vec).unsqueeze(0).to(device=device, dtype=torch.float32)
-                    class_tensor = torch.from_numpy(class_vec).unsqueeze(0).to(device=device, dtype=torch.float32)
-                    
-                    with torch.no_grad():
-                        w_vec = self.Gs.mapping(noise_tensor, class_tensor, truncation_psi=self.truncation_psi)
-                        image_tensor = self.Gs.synthesis(w_vec, **Gs_syn_kwargs)
-                    
-                    image_frame = ((image_tensor.squeeze(0).permute(1, 2, 0) * 127.5 + 128)
-                                 .clamp(0, 255).to(torch.uint8).cpu().numpy())
-            
-            # Save single frame
-            self.images_saver(image_frame, i, resolution)
+                    if self.use_tf:
+                        # Convert tensor batches to numpy arrays for TF processing
+                        noise_batch_np = noise_batch.numpy()
+                        class_batch_np = class_batch.numpy()
+                        # Tile class batch if necessary (ensuring shape compatibility)
+                        tiled_class = np.tile(class_batch_np, (batch_size, 1))
+                        w_batch = self.Gs.components.mapping.run(
+                            noise_batch_np, tiled_class
+                        )
+                        image_batch = self.Gs.components.synthesis.run(
+                            w_batch, **Gs_syn_kwargs
+                        )
+                        image_batch = np.array(image_batch)
+                    else:
+                        # DETAILED PROFILING: Track each step separately
+                        batch_start_time = time.time()
+                        
+                        device_start = time.time()
+                        # For PyTorch: move to device and run synthesis with no_grad
+                        # Use .to() for existing tensors instead of torch.tensor()
+                        noise_tensor = noise_batch.to(device=device, dtype=torch.float32)
+                        class_tensor = class_batch.to(device=device, dtype=torch.float32)
+                        device_time = time.time() - device_start
+                        
+                        mapping_start = time.time()
+                        with torch.no_grad():
+                            w_batch = self.Gs.mapping(
+                                noise_tensor,
+                                class_tensor,
+                                truncation_psi=self.truncation_psi,
+                            )
+                        mapping_time = time.time() - mapping_start
+                        
+                        synthesis_start = time.time()
+                        with torch.no_grad():
+                            image_batch = self.Gs.synthesis(w_batch, **Gs_syn_kwargs)
+                        synthesis_time = time.time() - synthesis_start
+                        
+                        postprocess_start = time.time()
+                        # AGGRESSIVE post-processing optimization - skip unnecessary conversions
+                        with torch.no_grad():
+                            # Direct conversion path optimized for MPS
+                            if image_batch.dtype == torch.float16:
+                                # Use optimized scaling for FP16 - avoid intermediate FP32
+                                image_batch = (
+                                    image_batch.permute(0, 2, 3, 1)  # NCHW → NHWC
+                                    .mul(127.5).add(128)             # Direct FP16 operations
+                                    .clamp(0, 255)                   # Keep in FP16
+                                    .to(torch.uint8)                 # Direct FP16 → uint8
+                                    .cpu().numpy()
+                                )
+                            else:
+                                # Standard path for FP32
+                                image_batch = (
+                                    image_batch.permute(0, 2, 3, 1)
+                                    .mul_(127.5).add_(128)
+                                    .clamp_(0, 255)
+                                    .to(torch.uint8)
+                                    .cpu().numpy()
+                                )
+                        postprocess_time = time.time() - postprocess_start
 
-    def images_saver(self, image_frame, frame_index: int, resolution):
-        # Apply effects to single frame
-        processed_frame = image_frame.copy()
-        for effect in self.custom_effects:
-            processed_frame = effect.apply_effect(array=processed_frame, index=frame_index)
+                        # Clear MPS cache to free memory after inference
+                        cache_start = time.time()
+                        torch.mps.empty_cache()
+                        cache_time = time.time() - cache_start
+                        
+                        # DETAILED LOGGING (only if verbose enabled)
+                        if self.verbose:
+                            total_time = device_time + mapping_time + synthesis_time + postprocess_time + cache_time
+                            print(f"📊 BATCH {i} DETAILED TIMING (batch_size={batch_size}):")
+                            print(f"  Device transfer: {device_time:.3f}s ({device_time/total_time*100:.1f}%)")
+                            print(f"  Mapping network: {mapping_time:.3f}s ({mapping_time/total_time*100:.1f}%)")
+                            print(f"  Synthesis network: {synthesis_time:.3f}s ({synthesis_time/total_time*100:.1f}%)")
+                            print(f"  Post-processing: {postprocess_time:.3f}s ({postprocess_time/total_time*100:.1f}%)")
+                            print(f"  Cache clearing: {cache_time:.3f}s ({cache_time/total_time*100:.1f}%)")
+                            print(f"  TOTAL BATCH TIME: {total_time:.3f}s")
+                            
+                            # Calculate effective throughput
+                            fps_effective = batch_size / total_time
+                            print(f"  Effective FPS: {fps_effective:.1f} frames/sec")
+                            print(f"  Time per frame: {total_time/batch_size:.3f}s")
+                            print()
+
+                # Ensure image_batch has shape (batch_size, height, width, channels)
+                if batch_size == 1 and image_batch.ndim == 3:
+                    image_batch = np.expand_dims(image_batch, axis=0)
+
+                # Submit the image saving task to the executor with timing
+                effects_io_start = time.time()
+                future = executor.submit(
+                    self.images_saver, image_batch, batch_size * i, resolution
+                )
+                futures.append(future)
+                effects_io_time = time.time() - effects_io_start
+                
+                # Log effects + I/O submission time (only if verbose enabled)
+                if self.verbose:
+                    print(f"  Effects + I/O submission: {effects_io_time:.3f}s")
+                    print(f"🔄 Total batch processing time: {time.time() - batch_start_time:.3f}s")
+                    print("="*60)
+
+            # Wait for all image-saving tasks to complete
+            concurrent.futures.wait(futures)
+
+    def images_saver(self, image, current_counter: int, resolution):
+        # Apply batch effects if possible, otherwise fall back to per-frame
+        processed_batch = self._apply_batch_effects(image, current_counter)
         
-        # Save single frame
-        file_name = str(frame_index).zfill(len(str(len(self.noise))))
-        self.file_names.append(file_name)
-        self.final_images.append(processed_frame)
+        # Prepare tasks for parallel saving
+        tasks = []
+        for j, array in enumerate(processed_batch):
+            file_name = str(current_counter + j).zfill(len(str(len(self.noise))))
+            tasks.append((file_name, array))
+
+        # Store resolution for async save method
+        self.resolution = resolution
+        
+        # Use the new async save method
+        self._async_save_batch(tasks)
     
+    def _apply_batch_effects(self, image_batch, current_counter):
+        """Apply effects to a batch of images, using vectorized operations when possible"""
+        if not self.custom_effects:
+            return image_batch
+            
+        # Convert to numpy array if it's not already
+        if isinstance(image_batch, list):
+            processed_batch = np.array(image_batch)
+        else:
+            processed_batch = image_batch.copy()
+        
+        # Track timing for effects processing
+        effects_start = time.time()
+        
+        # Apply each effect to the entire batch
+        for effect in self.custom_effects:
+            if hasattr(effect, 'apply_batch_effect'):
+                # Use batch processing if available
+                logging.debug(f"Using batch processing for {type(effect).__name__}")
+                processed_batch = effect.apply_batch_effect(processed_batch, current_counter)
+            else:
+                # Fallback to per-frame processing
+                logging.debug(f"Using per-frame processing for {type(effect).__name__}")
+                for j in range(processed_batch.shape[0]):
+                    processed_batch[j] = effect.apply_effect(
+                        array=processed_batch[j], 
+                        index=current_counter + j
+                    )
+        
+        # Memory management - ensure we don't hold onto large arrays longer than needed
+        if hasattr(self, '_last_batch_cache'):
+            del self._last_batch_cache
+        self._last_batch_cache = processed_batch
+        
+        return processed_batch
+    
+    def _async_save_batch(self, tasks, max_workers=None):
+        """Asynchronously save a batch of images with memory management"""
+        if not tasks:
+            return
+            
+        # Determine optimal worker count based on task size and system resources
+        if max_workers is None:
+            max_workers = min(len(tasks), 8, os.cpu_count() or 4)
+        
+        # Use context manager to ensure proper cleanup
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all save tasks
+            futures = []
+            for task in tasks:
+                future = executor.submit(self._save_single_image, task)
+                futures.append(future)
+            
+            # Wait for completion with timeout to prevent hanging
+            try:
+                concurrent.futures.wait(futures, timeout=30.0)
+            except concurrent.futures.TimeoutError:
+                logging.warning("Some image save operations timed out")
+    
+    def _save_single_image(self, task):
+        """Save a single image with error handling"""
+        try:
+            file_name, final_image = task
+            
+            # Resize if needed
+            if hasattr(self, 'resolution') and self.resolution and final_image.shape[0] != self.resolution:
+                # Use cv2 for faster resizing if available, fallback to PIL
+                try:
+                    import cv2
+                    final_image = cv2.resize(final_image, (self.resolution, self.resolution))
+                except ImportError:
+                    final_image_PIL = Image.fromarray(final_image, mode="RGB")
+                    final_image_PIL = final_image_PIL.resize((self.resolution, self.resolution))
+                    final_image = np.array(final_image_PIL)
+
+            # Save as PNG for better compression and speed
+            Image.fromarray(final_image, mode="RGB").save(
+                os.path.join(self.frames_dir, file_name + ".png"),
+                optimize=True
+            )
+        except Exception as e:
+            logging.error(f"Failed to save image {file_name}: {e}")
 
     def hallucinate(
         self,
@@ -798,6 +1038,7 @@ class LucidSonicDream:
         start: float = 0,
         duration: float = None,
         save_frames: bool = False,
+        batch_size: int = None,
         speed_fpm: int = 12,
         pulse_percussive: bool = True,
         pulse_harmonic: bool = False,
@@ -853,8 +1094,17 @@ class LucidSonicDream:
         self.file_name = file_name if file_name[-4:] == ".mp4" else file_name + ".mp4"
         self.resolution = resolution
 
-        # Use fixed batch size of 1 for optimal performance
-        self.batch_size = 1
+        # Determine optimal batch size if not provided
+        if batch_size is None:
+            self.batch_size = get_optimal_batch_size(
+                model_input_shape=self.input_shape,
+                target_memory_usage=0.8,  # 80% memory usage as requested
+                max_batch_size=8  # Reasonable maximum for M4 16GB
+            )
+            logging.info(f"Auto-selected batch size: {self.batch_size}")
+        else:
+            self.batch_size = batch_size
+            logging.info(f"Using provided batch size: {self.batch_size}")
         self.speed_fpm = speed_fpm
         self.pulse_react = pulse_react
         self.motion_react = motion_react
@@ -877,17 +1127,12 @@ class LucidSonicDream:
 
         # Configure logging to show optimization info
         logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-        
-        # Track total execution time for performance summary
-        hallucinate_start_time = time.time()
 
         # Initialize style
         if not self.style_exists:
             print("Preparing style...")
             if not callable(self.style):
                 self.stylegan_init()
-                # Pre-warm MPS memory subsystem after model loading
-                self._warm_up_mps_memory()
             self.style_exists = True
 
         # If there are changes in any of the following parameters,
@@ -958,10 +1203,6 @@ class LucidSonicDream:
         # By default, delete temporary frames directory
         if not save_frames:
             shutil.rmtree(self.frames_dir)
-            
-        # Log comprehensive performance summary
-        if self.verbose:
-            self._log_performance_summary(hallucinate_start_time)
 
 
 class EffectsGenerator:
@@ -1065,9 +1306,9 @@ class GPUBatchEffectsGenerator(BatchEffectsGenerator):
     def __init__(self, func, audio: str = None, strength: float = 0.5, percussive: bool = True):
         super().__init__(func, audio, strength, percussive)
         
-        # MPS-only optimization - always use MPS device
-        self.device = torch.device("mps")
-        self.use_gpu = True
+        # Check if we have GPU/MPS available
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        self.use_gpu = torch.backends.mps.is_available()
     
     def apply_batch_effect_gpu(self, tensor_batch, start_index):
         """Apply effect to a batch of tensors on GPU"""
