@@ -461,8 +461,8 @@ class LucidSonicDream:
         cumulative_motion = np.zeros(self.input_shape, dtype=np.float32)
 
         for i in range(num_frames):
-            # Reinitialize randomness factors every 4 seconds
-            if i % round(fps * 4) == 0:
+            # Reinitialize randomness factors every 10 seconds
+            if i % round(fps * 10) == 0:
                 rand_factors = np.where(
                     np.random.rand(self.input_shape) < 0.5,
                     1,
@@ -1234,7 +1234,7 @@ class EffectsGenerator:
         if self.percussive:
             wav = librosa.effects.hpss(wav)[1]
 
-        # Get normalized spectrogram
+        # Get normalized RMS energy spectrogram
         self.spec = get_spec_norm(wav, sr, n_mels=n_mels, hop_length=hop_length)
 
     def apply_effect(self, array, index):

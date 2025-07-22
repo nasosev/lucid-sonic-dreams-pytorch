@@ -177,7 +177,7 @@ if __name__ == "__main__":
         "motion_react": 0.1,  # Gentler motion reactions (default is 0.5)
         "contrast_strength": 0.2,
         "flash_strength": 0.2,
-        "batch_size": 8,
+        "batch_size": 4,
         "save_frames": True,
     }
 

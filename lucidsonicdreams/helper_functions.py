@@ -69,42 +69,28 @@ def consolidate_models():
 
 
 def get_spec_norm(wav, sr, n_mels, hop_length):
-    """Obtain maximum value for each time-frame in Mel Spectrogram,
-    and normalize using local windowing for better reactivity on long clips"""
+    """Calculate RMS energy for each time-frame from Mel Spectrogram,
+    providing smooth, physics-based energy representation ideal for DJ mixes"""
 
     # Generate Mel Spectrogram
     spec_raw = librosa.feature.melspectrogram(
         y=wav, sr=sr, n_mels=n_mels, hop_length=hop_length
     )
 
-    # Obtain maximum value per time-frame
-    spec_max = np.amax(spec_raw, axis=0)
+    # Calculate RMS energy per time-frame (Root Mean Square across frequency bins)
+    # More stable and representative of overall energy than spectral max
+    rms_energy = np.sqrt(np.mean(spec_raw**2, axis=0))
 
-    # Use local normalization with rolling window for better reactivity
-    # Window size: ~4 seconds worth of frames for local context
-    window_frames = max(1, int(4 * sr / hop_length))
+    # Simple global normalization - RMS energy is already smooth and stable
+    # Perfect for DJ mixes where you want consistent energy scaling across different tracks
+    global_max = np.max(rms_energy)
     
-    # Apply local normalization using rolling statistics
-    spec_norm = np.zeros_like(spec_max)
+    if global_max > 0:
+        rms_norm = rms_energy / global_max
+    else:
+        rms_norm = np.zeros_like(rms_energy)
     
-    for i in range(len(spec_max)):
-        # Define local window boundaries
-        start_idx = max(0, i - window_frames // 2)
-        end_idx = min(len(spec_max), i + window_frames // 2 + 1)
-        
-        # Get local window
-        local_window = spec_max[start_idx:end_idx]
-        
-        # Local normalization with fallback for edge cases
-        local_min = np.min(local_window)
-        local_range = np.ptp(local_window)
-        
-        if local_range > 0:
-            spec_norm[i] = (spec_max[i] - local_min) / local_range
-        else:
-            spec_norm[i] = 0.5  # Neutral value when no variation
-
-    return spec_norm
+    return rms_norm
 
 
 def interpolate(array_1: np.ndarray, array_2: np.ndarray, steps: int):
